@@ -59,9 +59,6 @@ func New(config Config) *Gateway {
 
 func (g *Gateway) setupRoutes() {
 	g.engine.GET("/ws", g.handleWebSocket)
-	g.engine.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
 }
 
 func (g *Gateway) handleWebSocket(c *gin.Context) {
