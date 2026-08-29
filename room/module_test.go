@@ -126,9 +126,9 @@ func (m *guessResp) Unmarshal(data []byte) (int, error) {
 
 func TestTypedHandle(t *testing.T) {
 	mod := NewModule[gameState]("test").
-		Handle(100, Typed(func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
+		HandleTyped(100, func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
 			return &guessResp{OK: req.Word == "слово" && p.ID == 1}, nil
-		}))
+		})
 
 	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
 	defer r.Shutdown()
@@ -136,7 +136,6 @@ func TestTypedHandle(t *testing.T) {
 		t.Fatalf("join: %v", err)
 	}
 
-	// Happy path: decoded request, encoded response.
 	resp, err := r.HandleMessage(1, 100, protocol.Encode(&guessReq{Word: "слово"}))
 	if err != nil {
 		t.Fatalf("handle: %v", err)
@@ -149,23 +148,19 @@ func TestTypedHandle(t *testing.T) {
 		t.Fatal("response OK = false, want true")
 	}
 
-	// Validation failure maps to 400.
 	_, err = r.HandleMessage(1, 100, protocol.Encode(&guessReq{Word: ""}))
 	var perr *protocol.Error
 	if !errors.As(err, &perr) || perr.Code != 400 {
 		t.Fatalf("err = %v, want 400 protocol.Error", err)
 	}
-
-	// Garbage payload maps to 400 (hand-written Unmarshal never fails, so
-	// simulate a decode failure with a real arpack type below).
 }
 
 func TestTypedHandleDecodeFailure(t *testing.T) {
 	// protocol.PlayerJoined is a real arpack type: Unmarshal rejects garbage.
 	mod := NewModule[gameState]("test").
-		Handle(100, Typed(func(r *Room[gameState], p *Player, req *protocol.PlayerJoined) (*guessResp, error) {
+		HandleTyped(100, func(r *Room[gameState], p *Player, req *protocol.PlayerJoined) (*guessResp, error) {
 			return &guessResp{OK: true}, nil
-		}))
+		})
 
 	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
 	defer r.Shutdown()
@@ -182,9 +177,9 @@ func TestTypedHandleDecodeFailure(t *testing.T) {
 
 func TestNilResponseYieldsEmptyPayload(t *testing.T) {
 	mod := NewModule[gameState]("test").
-		Handle(100, Typed(func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
+		HandleTyped(100, func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
 			return nil, nil
-		}))
+		})
 
 	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
 	defer r.Shutdown()

@@ -15,12 +15,11 @@ import (
 //		MaxPlayers(2).
 //		Singleton(protocol.SingletonReject).
 //		OnJoin(func(r *room.Room[WordState], p *room.Player) { ... }).
-//		Handle(uint16(messages.GameOpGuess), room.Typed(guessHandler)).
+//		HandleTyped(uint16(messages.GameOpGuess), guessHandler).
 //		Register(app)
 //
-// The type parameter must be named explicitly: Go cannot infer it from the
-// chained State call. Under the hood the builder assembles an opaque
-// room.Module, so its internals can evolve without breaking your code.
+// The state type must be named explicitly: Go cannot infer it from the
+// chained calls. Under the hood the builder assembles an opaque room.Module.
 type RoomBuilder[S any] struct {
 	module *room.Module[S]
 }
@@ -31,73 +30,81 @@ func Room[S any](typ string) *RoomBuilder[S] {
 	return &RoomBuilder[S]{module: room.NewModule[S](typ)}
 }
 
-// State sets the factory for the initial game state. Without it the state
-// is the zero value of S.
+// State sets the state factory; without it the state is the zero value of S.
 func (b *RoomBuilder[S]) State(fn func() *S) *RoomBuilder[S] {
 	b.module.State(fn)
 	return b
 }
 
-// MaxPlayers sets the default player cap (0 = unlimited). The create
-// request may override it per room.
+// MaxPlayers sets the default player cap (0 = unlimited); the create request
+// may override it per room.
 func (b *RoomBuilder[S]) MaxPlayers(n uint16) *RoomBuilder[S] {
 	b.module.MaxPlayers(n)
 	return b
 }
 
-// Singleton sets the singleton mode for rooms of this type. It always comes
-// from the module; the create request cannot override it.
+// Singleton sets the mode for rooms of this type; the create request cannot
+// override it.
 func (b *RoomBuilder[S]) Singleton(mode protocol.SingletonMode) *RoomBuilder[S] {
 	b.module.Singleton(mode)
 	return b
 }
 
-// OnInit runs once when the room is created, synchronously before the actor
-// starts.
+// OnInit runs synchronously at construction, before the room is shared.
 func (b *RoomBuilder[S]) OnInit(fn func(r *room.Room[S])) *RoomBuilder[S] {
 	b.module.OnInit(fn)
 	return b
 }
 
-// OnJoin runs after a player is added to the room.
+// OnJoin runs in the same serialized step as the player add.
 func (b *RoomBuilder[S]) OnJoin(fn func(r *room.Room[S], p *room.Player)) *RoomBuilder[S] {
 	b.module.OnJoin(fn)
 	return b
 }
 
-// OnLeave runs after a player is removed from the room.
 func (b *RoomBuilder[S]) OnLeave(fn func(r *room.Room[S], p *room.Player)) *RoomBuilder[S] {
 	b.module.OnLeave(fn)
 	return b
 }
 
-// OnClose runs when the room is shut down (removed).
 func (b *RoomBuilder[S]) OnClose(fn func(r *room.Room[S])) *RoomBuilder[S] {
 	b.module.OnClose(fn)
 	return b
 }
 
-// Tick enables the game loop: fn runs inside the actor every rate. dt is
-// the elapsed time since the previous tick.
+// Tick enables the game loop: fn runs inside the actor every rate; dt is the
+// time since the previous tick.
 func (b *RoomBuilder[S]) Tick(rate time.Duration, fn func(r *room.Room[S], dt time.Duration)) *RoomBuilder[S] {
 	b.module.Tick(rate, fn)
 	return b
 }
 
-// Handle registers a handler for op and returns the builder for chaining.
-// It panics on a duplicate opcode. Wrap a typed handler with room.Typed —
-// Go has no generic methods, so a typed Handle cannot be a method:
-//
-//	Handle(uint16(messages.GameOpGuess), room.Typed(guessHandler))
+// Handle registers a raw (bytes-in, Marshaler-out) handler; most code should
+// use HandleTyped. Panics on a duplicate opcode.
 func (b *RoomBuilder[S]) Handle(op uint16, h room.MessageHandler[S]) *RoomBuilder[S] {
 	b.module.Handle(op, h)
 	return b
 }
 
-// Register registers the room type with the app: rooms created with
-// CreateRoomRequest.Type == typ get the defined state, hooks, game loop and
-// message handlers. It panics on a duplicate type, or when one of the
-// opcodes is already registered globally.
+// HandleTyped registers a typed message handler: the payload is decoded into
+// Req (an empty payload yields a zero Req), Validate() is called when Req
+// implements it (failures map to a 400 error), and the response is encoded
+// by the framework (a nil response means an empty payload). Panics on a
+// duplicate opcode. All type parameters are inferred from fn.
+func (b *RoomBuilder[S]) HandleTyped[Req, Resp any, PReq interface {
+	*Req
+	protocol.Unmarshaler
+}, PResp interface {
+	*Resp
+	protocol.Marshaler
+}](op uint16, fn func(r *room.Room[S], p *room.Player, req PReq) (PResp, error)) *RoomBuilder[S] {
+	b.module.HandleTyped(op, fn)
+	return b
+}
+
+// Register registers the room type: rooms created with CreateRoomRequest.Type
+// == typ get the defined state, hooks, game loop and handlers. Panics on a
+// duplicate type or an opcode conflict with a global command.
 func (b *RoomBuilder[S]) Register(app *App) {
 	RegisterRoomType(app, b.module)
 }

@@ -29,7 +29,7 @@ Module      actors    handlers  module handlers
 The root package `partyx` is the facade: `partyx.New(Config)` builds and
 wires all subsystems, accessors expose them (`App.Rooms()`, `App.Bus()`,
 `App.Commands()`, `App.Sessions()`, `App.Engine()`), and helpers
-(`partyx.Handle`, the `partyx.Room[S]` builder) register game logic.
+(`App.Handle`, the `partyx.Room[S]` builder) register game logic.
 
 ## Wire Protocol
 
@@ -89,7 +89,7 @@ them as `protocol.Marshaler` / `protocol.Unmarshaler`.
 
 ```
 partyx (root)        Facade: App, Config, Room[S] builder (fluent room-type
-                     definition + Register), Handle[Req,Resp], HandleRaw,
+                     definition + Register), App.Handle[Req,Resp]/HandleRaw,
                      RegisterRoomType[S] (low-level), DevAuth, aliases (Context, Error...)
 ├── protocol/        Wire schema + generated code, Marshaler/Unmarshaler,
 │                    Encode/Decode helpers, Error, reserved opcodes
@@ -130,7 +130,7 @@ partyx.Room[WordState]("wordgame").
 	OnLeave(func(r *room.Room[WordState], p *room.Player) { ... }).
 	OnClose(func(r *room.Room[WordState]) { ... }).
 	Tick(100*time.Millisecond, func(r *room.Room[WordState], dt time.Duration) { ... }).
-	Handle(op, room.Typed(guessHandler)). // no generic methods in Go — Typed adapts
+	HandleTyped(op, guessHandler).
 	Register(app)
 ```
 
@@ -142,7 +142,7 @@ mutated directly with no locks and no user-visible `Do`:
 - `OnJoin`/`OnLeave` run inside the same serialized step as the player
   add/remove;
 - `OnTick` runs in the actor loop every `Tick(rate, fn)` interval;
-- message handlers (`Handle(op, room.Typed(fn))`) are invoked through the actor
+- message handlers (`HandleTyped(op, fn)`) are invoked through the actor
   inbox, and the caller (gateway) blocks until completion.
 
 Typed handlers decode the payload, auto-call `Validate() error` when
@@ -154,7 +154,7 @@ means an empty payload. Panics in hooks/handlers are recovered and logged
 
 Request dispatch order:
 
-1. Global registry (`partyx.Handle`) — wins on opcode conflicts (registration
+1. Global registry (`App.Handle`) — wins on opcode conflicts (registration
    panics instead: an opcode may have exactly one owner);
 2. Room modules: opcode → room type (`Manager.opTypes`) → the calling
    client's joined rooms of that type:

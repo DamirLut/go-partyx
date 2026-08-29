@@ -134,11 +134,11 @@ explicitly in production.
 
 ## 3. Global Commands (RPC)
 
-A global command is registered with a generic helper — no manual payload
-parsing:
+A global command is registered with a generic method on the app — no manual
+payload parsing:
 
 ```go
-partyx.Handle(app, uint16(messages.GameOpGuess), func(ctx *partyx.Context, req *messages.GuessRequest) (*messages.GuessResponse, error) {
+app.Handle(uint16(messages.GameOpGuess), func(ctx *partyx.Context, req *messages.GuessRequest) (*messages.GuessResponse, error) {
 	// req is already decoded and validated (Validate, if implemented)
 	return &messages.GuessResponse{Correct: req.Word == "party"}, nil
 })
@@ -166,7 +166,7 @@ else becomes 500.
 | `ctx.Rooms` | Room manager (find/create rooms) |
 | `ctx.Subscribe(topic)` / `ctx.Unsub(topic)` | Client subscriptions |
 
-Escape hatch for raw bytes — `partyx.HandleRaw(app, op, fn)`. An opcode may
+Escape hatch for raw bytes — `app.HandleRaw(op, fn)`. An opcode may
 have exactly one owner: a duplicate (global or from a room module) panics at
 startup.
 
@@ -200,7 +200,7 @@ partyx.Room[WordState]("wordgame"). // CreateRoomRequest.Type -> this type
 		delete(r.State.Words, p.ID)
 	}).
 	// Typed room message handler — runs inside the actor.
-	Handle(uint16(messages.GameOpGuess), room.Typed(
+	HandleTyped(uint16(messages.GameOpGuess),
 		func(r *room.Room[WordState], p *room.Player, req *messages.GuessRequest) (*messages.GuessResponse, error) {
 			correct := req.Word == "party"
 			if correct {
@@ -209,18 +209,18 @@ partyx.Room[WordState]("wordgame"). // CreateRoomRequest.Type -> this type
 					&messages.WordGuessed{PlayerID: p.ID, Word: req.Word})
 			}
 			return &messages.GuessResponse{Correct: correct}, nil
-		})).
+		}).
 	Register(app)
 ```
 
-Two syntax quirks are Go limitations, not API whims:
+Two notes on the syntax:
 
 - the state type is named explicitly — `partyx.Room[WordState]("wordgame")`:
   Go cannot infer it from the subsequent `.State(...)` call;
-- a typed handler is wrapped in `room.Typed(...)`: Go has no generic
-  methods, so `Handle` takes a raw `room.MessageHandler[S]` while `Typed` is
-  a generic function (decodes the payload, calls `Validate()`, encodes the
-  response; a `nil` response → an empty payload).
+- `HandleTyped(op, fn)` is a generic method (Go 1.27): all its type
+  parameters are inferred from `fn`, and the framework decodes the payload,
+  calls `Validate()` when implemented, and encodes the response (a `nil`
+  response → an empty payload).
 
 Under the hood the builder assembles a `room.Module` — an internal opaque
 struct; its fields are inaccessible from outside, so its internals can
@@ -238,7 +238,8 @@ Builder methods (all optional except `Register`):
 | `OnLeave(fn)` | After a player is removed |
 | `OnClose(fn)` | When the room is removed |
 | `Tick(rate, fn)` | Game loop: `fn` every `rate` inside the actor (timers, physics, rounds) |
-| `Handle(op, h)` | Message handler; panics on a duplicate opcode |
+| `HandleTyped(op, fn)` | Typed message handler (decoded/validated/encoded by the framework); panics on a duplicate opcode |
+| `Handle(op, h)` | Raw message handler (bytes in, Marshaler out); panics on a duplicate opcode |
 | `Register(app)` | Registers the type; panics on a duplicate type or an opcode conflict with a global method |
 
 Available inside: `r.State` (your state), `r.Players()`,

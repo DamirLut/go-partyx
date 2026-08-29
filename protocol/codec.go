@@ -44,3 +44,36 @@ func Decode[T any, PT interface {
 	}
 	return v, nil
 }
+
+// Call adapts a typed handler to the raw payload protocol: the payload is
+// decoded into Req (an empty payload yields a zero Req), Validate() is
+// called when Req implements it (failures map to a 400 error), fn runs, and
+// the response is returned for encoding. A typed-nil response becomes a nil
+// Marshaler (empty payload).
+func Call[Req any, Resp any, PReq interface {
+	*Req
+	Unmarshaler
+}, PResp interface {
+	*Resp
+	Marshaler
+}](payload []byte, fn func(req PReq) (PResp, error)) (Marshaler, error) {
+	req, err := Decode[Req, PReq](payload)
+	if err != nil {
+		return nil, NewError(400, "invalid payload")
+	}
+	if v, ok := any(PReq(req)).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			return nil, NewError(400, err.Error())
+		}
+	}
+	resp, err := fn(PReq(req))
+	if err != nil {
+		return nil, err
+	}
+	// Compare via the core type: a typed-nil pointer boxed in an
+	// interface is not == nil, but the client expects an empty payload.
+	if (*Resp)(resp) == nil {
+		return nil, nil
+	}
+	return resp, nil
+}

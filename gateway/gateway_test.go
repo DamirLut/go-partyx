@@ -229,31 +229,26 @@ func TestErrorCodes(t *testing.T) {
 	c2 := dialWS(t, srv)
 	auth(t, c2, "bob")
 
-	// Full room -> 409.
 	request(t, c2, 3, uint16(protocol.MethodRoomJoin), &protocol.JoinRoomRequest{RoomID: created.ID})
 	if msg := readUntilID(t, c2, 3); msg.Type != protocol.MessageError || msg.Code != 409 {
 		t.Fatalf("full room: %+v, want error 409", msg)
 	}
 
-	// Missing room -> 404.
 	request(t, c2, 4, uint16(protocol.MethodRoomJoin), &protocol.JoinRoomRequest{RoomID: "missing"})
 	if msg := readUntilID(t, c2, 4); msg.Type != protocol.MessageError || msg.Code != 404 {
 		t.Fatalf("missing room: %+v, want error 404", msg)
 	}
 
-	// Unknown opcode -> 404.
 	request(t, c2, 5, 999, nil)
 	if msg := readUntilID(t, c2, 5); msg.Type != protocol.MessageError || msg.Code != 404 {
 		t.Fatalf("unknown method: %+v, want error 404", msg)
 	}
 
-	// Missing room type -> 400.
 	request(t, c2, 6, uint16(protocol.MethodRoomCreate), &protocol.CreateRoomRequest{Name: "x"})
 	if msg := readUntilID(t, c2, 6); msg.Type != protocol.MessageError || msg.Code != 400 {
 		t.Fatalf("missing type: %+v, want error 400", msg)
 	}
 
-	// Garbage payload -> 400.
 	sendMsg(t, c2, &protocol.ClientMessage{
 		Type:    protocol.MessageRequest,
 		ID:      7,
@@ -326,11 +321,11 @@ func TestRoomModuleFlow(t *testing.T) {
 
 	srv := newTestServer(t, func(rooms *room.Manager, commands *command.Registry) {
 		mod := room.NewModule[echoState]("echo").
-			Handle(opEcho, room.Typed(func(r *room.Room[echoState], p *room.Player, req *protocol.Kicked) (*protocol.Kicked, error) {
+			HandleTyped(opEcho, func(r *room.Room[echoState], p *room.Player, req *protocol.Kicked) (*protocol.Kicked, error) {
 				r.State.seen++
 				r.Broadcast(opEcho, &protocol.Kicked{Reason: "seen", RoomID: r.ID()})
 				return &protocol.Kicked{Reason: req.Reason, RoomID: req.RoomID}, nil
-			}))
+			})
 		rooms.RegisterModule(mod)
 	})
 

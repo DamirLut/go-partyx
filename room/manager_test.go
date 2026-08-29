@@ -245,9 +245,9 @@ func TestModuleBackedRoomUsesModuleConfig(t *testing.T) {
 func TestDispatchRoomMessage(t *testing.T) {
 	m := newTestManager()
 	mod := NewModule[gameState]("duel").
-		Handle(100, Typed(func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
+		HandleTyped(100, func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
 			return &guessResp{OK: true}, nil
-		}))
+		})
 	m.RegisterModule(mod)
 
 	r := m.Create(RoomConfig{Type: "duel"})
@@ -258,7 +258,6 @@ func TestDispatchRoomMessage(t *testing.T) {
 
 	roomIDs := []string{r.ID()}
 
-	// Happy path.
 	resp, err, handled := m.DispatchRoomMessage(1, 100, protocol.Encode(&guessReq{Word: "x"}), roomIDs)
 	if !handled || err != nil {
 		t.Fatalf("handled = %v, err = %v", handled, err)

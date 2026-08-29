@@ -1,6 +1,6 @@
 module github.com/damirlut/go-partyx
 
-go 1.26
+go 1.27
 
 require (
 	github.com/edmand46/arpack v1.0.2
