@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"log"
 	"strconv"
 	"strings"
@@ -38,6 +39,11 @@ type Client struct {
 	roomIDs map[string]struct{}
 	bus     *eventbus.EventBus
 
+	// ctx lives for the connection; canceled by Close. Request handlers get
+	// it (directly or derived).
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu            sync.RWMutex
 	session       *session.Session
 	authenticated bool
@@ -48,6 +54,7 @@ type Client struct {
 
 func NewClient(conn *websocket.Conn, bus *eventbus.EventBus) *Client {
 	id := nextClientID.Add(1)
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		id:      id,
 		conn:    conn,
@@ -55,6 +62,8 @@ func NewClient(conn *websocket.Conn, bus *eventbus.EventBus) *Client {
 		topics:  make(map[string]struct{}),
 		roomIDs: make(map[string]struct{}),
 		bus:     bus,
+		ctx:     ctx,
+		cancel:  cancel,
 		done:    make(chan struct{}),
 	}
 
@@ -67,6 +76,12 @@ func NewClient(conn *websocket.Conn, bus *eventbus.EventBus) *Client {
 
 func (c *Client) ID() uint64 {
 	return c.id
+}
+
+// Context returns the connection context: canceled when the connection
+// closes or the gateway shuts down.
+func (c *Client) Context() context.Context {
+	return c.ctx
 }
 
 // Send implements eventbus.Subscriber.
@@ -250,9 +265,11 @@ func (c *Client) ReadLoop(dispatcher *Dispatcher) {
 }
 
 // Close is idempotent: it signals WriteLoop to flush pending messages and
-// close the connection, so queued messages are not lost.
+// close the connection (so queued messages are not lost), and cancels the
+// connection context.
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		close(c.done)
+		c.cancel()
 	})
 }

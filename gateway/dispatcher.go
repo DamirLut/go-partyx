@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 
 	"github.com/damirlut/go-partyx/command"
@@ -57,7 +58,11 @@ func (d *Dispatcher) handleAuth(c *Client, msg *protocol.ClientMessage) {
 		return
 	}
 
-	sess, err := d.authenticator.Authenticate(msg.Token)
+	// Token verification (often an external call) is bounded by the auth
+	// timeout and canceled if the connection dies meanwhile.
+	authCtx, cancel := context.WithTimeout(c.Context(), authTimeout)
+	defer cancel()
+	sess, err := d.authenticator.Authenticate(authCtx, msg.Token)
 	if err != nil {
 		c.SendError(msg.ID, err.Error(), 401)
 		// Close is graceful: WriteLoop flushes the queued error before
@@ -76,9 +81,15 @@ func (d *Dispatcher) handleAuth(c *Client, msg *protocol.ClientMessage) {
 }
 
 func (d *Dispatcher) handleRequest(c *Client, msg *protocol.ClientMessage) {
+	// Request scope: handlers observe connection loss and server shutdown
+	// through ctx; it is canceled once the response is produced.
+	ctx, cancel := context.WithCancel(c.Context())
+	defer cancel()
+
 	// Global handlers win over room-scoped routing.
 	if handler, ok := d.commands.Get(msg.Op); ok {
-		ctx := &command.Context{
+		cmdCtx := &command.Context{
+			Context:   ctx,
 			Session:   c.Session(),
 			ClientID:  c.ID(),
 			Bus:       d.bus,
@@ -86,12 +97,12 @@ func (d *Dispatcher) handleRequest(c *Client, msg *protocol.ClientMessage) {
 			Subscribe: c.Subscribe,
 			Unsub:     c.Unsubscribe,
 		}
-		result, err := handler(ctx, msg.Payload)
+		result, err := handler(cmdCtx, msg.Payload)
 		d.respond(c, msg.ID, result, err)
 		return
 	}
 
-	result, err, handled := d.rooms.DispatchRoomMessage(c.ID(), msg.Op, msg.Payload, c.RoomIDs())
+	result, err, handled := d.rooms.DispatchRoomMessage(ctx, c.ID(), msg.Op, msg.Payload, c.RoomIDs())
 	if !handled {
 		c.SendError(msg.ID, "method not found", 404)
 		return

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"net/http/httptest"
 	"strings"
@@ -22,7 +23,7 @@ import (
 
 type testAuth struct{}
 
-func (testAuth) Authenticate(token string) (*session.Session, error) {
+func (testAuth) Authenticate(ctx context.Context, token string) (*session.Session, error) {
 	if token == "" {
 		return nil, errors.New("token required")
 	}
@@ -327,7 +328,7 @@ func TestRoomModuleFlow(t *testing.T) {
 
 	srv := newTestServer(t, func(rooms *room.Manager, commands *command.Registry) {
 		mod := room.NewModule[echoState]("echo").
-			HandleTyped(opEcho, func(r *room.Room[echoState], p *room.Player, req *protocol.Kicked) (*protocol.Kicked, error) {
+			Handle(opEcho, func(ctx context.Context, r *room.Room[echoState], p *room.Player, req *protocol.Kicked) (*protocol.Kicked, error) {
 				r.State.seen++
 				r.Broadcast(opEcho, &protocol.Kicked{Reason: "seen", RoomID: r.ID()})
 				return &protocol.Kicked{Reason: req.Reason, RoomID: req.RoomID}, nil

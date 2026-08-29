@@ -1,6 +1,7 @@
 package room
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -62,12 +63,20 @@ func TestJoinAndLeave(t *testing.T) {
 	if err := r.Join(1, "alice"); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	if info := r.Info(); info.PlayerCount != 1 {
+	info, err := r.Info()
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if info.PlayerCount != 1 {
 		t.Fatalf("playerCount = %d, want 1", info.PlayerCount)
 	}
 
 	r.Leave(1)
-	if info := r.Info(); info.PlayerCount != 0 {
+	info, err = r.Info()
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if info.PlayerCount != 0 {
 		t.Fatalf("playerCount = %d, want 0", info.PlayerCount)
 	}
 
@@ -96,7 +105,11 @@ func TestJoinIsIdempotentForSameClient(t *testing.T) {
 	if err := r.Join(1, "alice"); err != nil {
 		t.Fatalf("rejoin: %v", err)
 	}
-	if info := r.Info(); info.PlayerCount != 1 {
+	info, err := r.Info()
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if info.PlayerCount != 1 {
 		t.Fatalf("playerCount = %d, want 1", info.PlayerCount)
 	}
 	// No duplicate player.joined event on idempotent rejoin.
@@ -144,6 +157,20 @@ func TestJoinAfterShutdown(t *testing.T) {
 	}
 }
 
+func TestInfoAfterShutdownReturnsError(t *testing.T) {
+	r, _ := newTestRoom(RoomConfig{Name: "arena", Type: "test"})
+	r.Shutdown()
+
+	// A shutdown room must not silently degrade to a zero-value snapshot.
+	info, err := r.Info()
+	if !errors.Is(err, ErrRoomClosed) {
+		t.Fatalf("err = %v, want ErrRoomClosed", err)
+	}
+	if info.ID != "" {
+		t.Fatalf("info = %+v, want zero value", info)
+	}
+}
+
 func TestLeaveNonMemberPublishesNothing(t *testing.T) {
 	r, bus := newTestRoom(RoomConfig{Name: "arena", Type: "test"})
 	defer r.Shutdown()
@@ -159,7 +186,11 @@ func TestLeaveNonMemberPublishesNothing(t *testing.T) {
 	if got := sub.ops(); len(got) != 1 || got[0] != uint16(protocol.EventPlayerJoined) {
 		t.Fatalf("events = %v, want [player.joined]", got)
 	}
-	if info := r.Info(); info.PlayerCount != 1 {
+	info, err := r.Info()
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if info.PlayerCount != 1 {
 		t.Fatalf("playerCount = %d, want 1", info.PlayerCount)
 	}
 }
@@ -230,7 +261,7 @@ func TestBroadcast(t *testing.T) {
 // Regression: a panicking module hook must not kill the room actor.
 func TestPanickingHandlerKeepsRoomAlive(t *testing.T) {
 	mod := NewModule[EmptyState]("test")
-	mod.Handle(100, func(r *Room[EmptyState], p *Player, payload []byte) (protocol.Marshaler, error) {
+	mod.HandleRaw(100, func(ctx context.Context, r *Room[EmptyState], p *Player, payload []byte) (protocol.Marshaler, error) {
 		panic("boom")
 	})
 	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New())
@@ -239,26 +270,30 @@ func TestPanickingHandlerKeepsRoomAlive(t *testing.T) {
 	if err := r.Join(1, "alice"); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	_, err := r.HandleMessage(1, 100, nil)
+	_, err := r.HandleMessage(context.Background(), 1, 100, nil)
 	var perr *protocol.Error
 	if !errors.As(err, &perr) || perr.Code != 500 {
 		t.Fatalf("err = %v, want 500 protocol.Error", err)
 	}
 	// Room still works after the panic.
-	if info := r.Info(); info.PlayerCount != 1 {
+	info, err := r.Info()
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if info.PlayerCount != 1 {
 		t.Fatalf("playerCount = %d, want 1 (actor survived)", info.PlayerCount)
 	}
 }
 
 func TestHandleMessageRequiresMembership(t *testing.T) {
 	mod := NewModule[EmptyState]("test")
-	mod.Handle(100, func(r *Room[EmptyState], p *Player, payload []byte) (protocol.Marshaler, error) {
+	mod.HandleRaw(100, func(ctx context.Context, r *Room[EmptyState], p *Player, payload []byte) (protocol.Marshaler, error) {
 		return nil, nil
 	})
 	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New())
 	defer r.Shutdown()
 
-	if _, err := r.HandleMessage(1, 100, nil); !errors.Is(err, ErrNotInRoom) {
+	if _, err := r.HandleMessage(context.Background(), 1, 100, nil); !errors.Is(err, ErrNotInRoom) {
 		t.Fatalf("err = %v, want ErrNotInRoom", err)
 	}
 }
@@ -272,4 +307,87 @@ func TestRoomIDsAreUnique(t *testing.T) {
 	if r1.ID() == r2.ID() {
 		t.Fatalf("duplicate room id: %s", r1.ID())
 	}
+}
+
+// Regression: hooks and handlers run inside the room actor, so the blocking
+// accessors (Players, Info, ...) would deadlock there. The direct accessors
+// PlayerList, HasPlayerID and RoomInfo must complete.
+func TestHooksUseActorInternalAccessors(t *testing.T) {
+	joined := make(chan struct{})
+	handled := make(chan struct{})
+	closed := make(chan struct{})
+
+	mod := NewModule[EmptyState]("test")
+	mod.OnJoin(func(ctx context.Context, r *Room[EmptyState], p *Player) {
+		if !r.HasPlayerID(p.ID) {
+			t.Error("HasPlayerID = false, want true")
+		}
+		if players := r.PlayerList(); len(players) != 1 || players[0].ID != p.ID {
+			t.Errorf("PlayerList = %v, want [%d]", players, p.ID)
+		}
+		if info := r.RoomInfo(); info.PlayerCount != 1 {
+			t.Errorf("RoomInfo.PlayerCount = %d, want 1", info.PlayerCount)
+		}
+		close(joined)
+	})
+	mod.OnClose(func(ctx context.Context, r *Room[EmptyState]) {
+		if players := r.PlayerList(); len(players) != 1 {
+			t.Errorf("PlayerList in OnClose = %v, want 1 player", players)
+		}
+		close(closed)
+	})
+	mod.HandleRaw(100, func(ctx context.Context, r *Room[EmptyState], p *Player, payload []byte) (protocol.Marshaler, error) {
+		if !r.HasPlayerID(p.ID) {
+			t.Error("HasPlayerID = false, want true")
+		}
+		if info := r.RoomInfo(); info.ID == "" {
+			t.Error("RoomInfo.ID is empty")
+		}
+		close(handled)
+		return nil, nil
+	})
+
+	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New())
+	defer r.Shutdown()
+
+	joinDone := make(chan struct{})
+	go func() {
+		if err := r.Join(1, "alice"); err != nil {
+			t.Errorf("join: %v", err)
+		}
+		close(joinDone)
+	}()
+	select {
+	case <-joinDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Join deadlocked: OnJoin used a blocking accessor")
+	}
+	<-joined
+
+	msgDone := make(chan struct{})
+	go func() {
+		if _, err := r.HandleMessage(context.Background(), 1, 100, nil); err != nil {
+			t.Errorf("handle: %v", err)
+		}
+		close(msgDone)
+	}()
+	select {
+	case <-msgDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleMessage deadlocked: handler used a blocking accessor")
+	}
+	<-handled
+
+	// OnClose fires via the loop defer after Shutdown cancels the ctx.
+	shutdownDone := make(chan struct{})
+	go func() {
+		r.Shutdown()
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown deadlocked: OnClose used a blocking accessor")
+	}
+	<-closed
 }

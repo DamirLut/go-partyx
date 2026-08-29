@@ -1,6 +1,7 @@
 package room
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -104,7 +105,11 @@ func TestLeaveByOldClientKeepsSingletonRecord(t *testing.T) {
 		t.Fatalf("join B err = %v, want ErrAlreadyInRoomOfType", err)
 	}
 	// Client 2 is still a player in room A.
-	if info := rA.Info(); info.PlayerCount != 1 {
+	info, err := rA.Info()
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
+	if info.PlayerCount != 1 {
 		t.Fatalf("playerCount = %d, want 1", info.PlayerCount)
 	}
 }
@@ -230,7 +235,10 @@ func TestModuleBackedRoomUsesModuleConfig(t *testing.T) {
 	r := m.Create(RoomConfig{Type: "duel", MaxPlayers: 5, SingletonMode: protocol.SingletonAllow})
 	defer m.Remove(r.ID())
 
-	info := r.Info()
+	info, err := r.Info()
+	if err != nil {
+		t.Fatalf("info: %v", err)
+	}
 	if info.MaxPlayers != 5 {
 		t.Fatalf("maxPlayers = %d, want 5 (request override)", info.MaxPlayers)
 	}
@@ -245,7 +253,7 @@ func TestModuleBackedRoomUsesModuleConfig(t *testing.T) {
 func TestDispatchRoomMessage(t *testing.T) {
 	m := newTestManager()
 	mod := NewModule[gameState]("duel").
-		HandleTyped(100, func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
+		Handle(100, func(ctx context.Context, r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
 			return &guessResp{OK: true}, nil
 		})
 	m.RegisterModule(mod)
@@ -258,7 +266,7 @@ func TestDispatchRoomMessage(t *testing.T) {
 
 	roomIDs := []string{r.ID()}
 
-	resp, err, handled := m.DispatchRoomMessage(1, 100, protocol.Encode(&guessReq{Word: "x"}), roomIDs)
+	resp, err, handled := m.DispatchRoomMessage(context.Background(), 1, 100, protocol.Encode(&guessReq{Word: "x"}), roomIDs)
 	if !handled || err != nil {
 		t.Fatalf("handled = %v, err = %v", handled, err)
 	}
@@ -268,12 +276,12 @@ func TestDispatchRoomMessage(t *testing.T) {
 	}
 
 	// Unknown opcode: not handled at all.
-	if _, _, handled := m.DispatchRoomMessage(1, 999, nil, roomIDs); handled {
+	if _, _, handled := m.DispatchRoomMessage(context.Background(), 1, 999, nil, roomIDs); handled {
 		t.Fatal("op 999 should not be handled")
 	}
 
 	// Known opcode but the client is in no room of that type.
-	if _, err, handled := m.DispatchRoomMessage(2, 100, nil, roomIDs); !handled || !errors.Is(err, ErrNotInRoom) {
+	if _, err, handled := m.DispatchRoomMessage(context.Background(), 2, 100, nil, roomIDs); !handled || !errors.Is(err, ErrNotInRoom) {
 		t.Fatalf("handled = %v, err = %v, want ErrNotInRoom", handled, err)
 	}
 }
@@ -282,7 +290,7 @@ func TestDispatchRoomMessageAmbiguous(t *testing.T) {
 	m := newTestManager()
 	mod := NewModule[gameState]("duel").
 		Singleton(protocol.SingletonAllow).
-		Handle(100, func(r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
+		HandleRaw(100, func(ctx context.Context, r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
 			return nil, nil
 		})
 	m.RegisterModule(mod)
@@ -299,7 +307,7 @@ func TestDispatchRoomMessageAmbiguous(t *testing.T) {
 	}
 
 	// The client is in two rooms of the same type: routing is ambiguous.
-	_, err, handled := m.DispatchRoomMessage(1, 100, nil, []string{r1.ID(), r2.ID()})
+	_, err, handled := m.DispatchRoomMessage(context.Background(), 1, 100, nil, []string{r1.ID(), r2.ID()})
 	if !handled || !errors.Is(err, ErrAmbiguousRoom) {
 		t.Fatalf("handled = %v, err = %v, want ErrAmbiguousRoom", handled, err)
 	}
@@ -319,13 +327,13 @@ func TestDuplicateModuleTypePanics(t *testing.T) {
 func TestDuplicateModuleOpcodePanics(t *testing.T) {
 	m := newTestManager()
 	a := NewModule[gameState]("a")
-	a.Handle(100, func(r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
+	a.HandleRaw(100, func(ctx context.Context, r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
 		return nil, nil
 	})
 	m.RegisterModule(a)
 
 	b := NewModule[gameState]("b")
-	b.Handle(100, func(r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
+	b.HandleRaw(100, func(ctx context.Context, r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
 		return nil, nil
 	})
 	defer func() {

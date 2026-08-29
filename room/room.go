@@ -15,6 +15,14 @@ import (
 // Room is an actor: a goroutine plus an inbox of functions. All mutations of
 // the player list and of the game State happen inside that goroutine, so
 // module hooks, message handlers and OnTick never need locks.
+//
+// Its methods come in two groups. The blocking ones (Join, Leave, Players,
+// HasPlayer, Info, IsOpen, ...) submit a closure to the inbox and wait for
+// the actor to run them — they are for callers outside the actor. Calling a
+// blocking method from a hook, message handler or OnTick deadlocks: the
+// actor is busy running the very code that waits on it. Code running inside
+// the actor must use the direct accessors instead: PlayerList, HasPlayerID
+// and RoomInfo read the state without the inbox.
 type Room[S any] struct {
 	id     string
 	config RoomConfig
@@ -59,7 +67,7 @@ func newRoom[S any](config RoomConfig, module *Module[S], bus *eventbus.EventBus
 	r.wg.Add(1)
 	// OnInit runs before the actor starts, so the room is not shared yet.
 	if module.onInit != nil {
-		r.safe("OnInit", func() { module.onInit(r) })
+		r.safe("OnInit", func() { module.onInit(ctx, r) })
 	}
 	go r.loop()
 	return r
@@ -77,7 +85,7 @@ func (r *Room[S]) loop() {
 			ticker.Stop()
 		}
 		if r.module.onClose != nil {
-			r.safe("OnClose", func() { r.module.onClose(r) })
+			r.safe("OnClose", func() { r.module.onClose(r.ctx, r) })
 		}
 	}()
 
@@ -97,7 +105,7 @@ func (r *Room[S]) loop() {
 		case now := <-tick:
 			dt := now.Sub(last)
 			last = now
-			r.safe("OnTick", func() { r.module.onTick(r, dt) })
+			r.safe("OnTick", func() { r.module.onTick(r.ctx, r, dt) })
 		case <-r.ctx.Done():
 			return
 		}
@@ -165,7 +173,7 @@ func (r *Room[S]) Join(clientID uint64, userID string) error {
 			r.players[clientID] = p
 			joined = true
 			if r.module.onJoin != nil {
-				r.module.onJoin(r, p)
+				r.module.onJoin(r.ctx, r, p)
 			}
 		}
 	})
@@ -197,7 +205,7 @@ func (r *Room[S]) JoinReplace(oldClientID, clientID uint64, userID string) error
 		if old, ok := r.players[oldClientID]; ok {
 			delete(r.players, oldClientID)
 			if r.module.onLeave != nil {
-				r.module.onLeave(r, old)
+				r.module.onLeave(r.ctx, r, old)
 			}
 		}
 		if r.config.MaxPlayers > 0 && uint16(len(r.players)) >= r.config.MaxPlayers {
@@ -208,7 +216,7 @@ func (r *Room[S]) JoinReplace(oldClientID, clientID uint64, userID string) error
 		p := &Player{ID: clientID, UserID: userID, JoinedAt: time.Now().Unix()}
 		r.players[clientID] = p
 		if r.module.onJoin != nil {
-			r.module.onJoin(r, p)
+			r.module.onJoin(r.ctx, r, p)
 		}
 	})
 	if !executed {
@@ -237,7 +245,7 @@ func (r *Room[S]) Leave(clientID uint64) {
 		existed = true
 		delete(r.players, clientID)
 		if r.module.onLeave != nil {
-			r.module.onLeave(r, p)
+			r.module.onLeave(r.ctx, r, p)
 		}
 		empty = len(r.players) == 0
 	})
@@ -260,47 +268,90 @@ func (r *Room[S]) Open() {
 	r.do(func(r *Room[S]) { r.isOpen = true })
 }
 
+// IsOpen reports whether the room accepts joins. It runs on the room actor;
+// calling it from a hook, message handler or OnTick deadlocks — read
+// RoomInfo().IsOpen there instead.
 func (r *Room[S]) IsOpen() bool {
 	var open bool
 	r.do(func(r *Room[S]) { open = r.isOpen })
 	return open
 }
 
-// Info returns a snapshot of the room. A zero protocol.RoomInfo is returned
-// if the room is already shut down.
-func (r *Room[S]) Info() protocol.RoomInfo {
+// Info returns a snapshot of the room. It runs on the room actor; calling it
+// from a hook, message handler or OnTick deadlocks — use RoomInfo there. If
+// the room is already shut down it returns ErrRoomClosed instead of a silent
+// zero value.
+func (r *Room[S]) Info() (protocol.RoomInfo, error) {
 	var info protocol.RoomInfo
-	r.do(func(r *Room[S]) {
-		info = protocol.RoomInfo{
-			ID:            r.id,
-			Name:          r.config.Name,
-			Type:          r.config.Type,
-			MaxPlayers:    r.config.MaxPlayers,
-			PlayerCount:   uint16(len(r.players)),
-			IsOpen:        r.isOpen,
-			SingletonMode: r.config.SingletonMode,
-		}
+	executed := r.do(func(r *Room[S]) {
+		info = r.roomInfo()
 	})
-	return info
+	if !executed {
+		return protocol.RoomInfo{}, ErrRoomClosed
+	}
+	return info, nil
 }
 
 // Players returns a snapshot of the current players. Player structs are
-// immutable after join, so the snapshot is safe to read anywhere.
+// immutable after join, so the snapshot is safe to read anywhere. It runs on
+// the room actor; calling it from a hook, message handler or OnTick
+// deadlocks — use PlayerList there.
 func (r *Room[S]) Players() []*Player {
 	var out []*Player
 	r.do(func(r *Room[S]) {
-		out = make([]*Player, 0, len(r.players))
-		for _, p := range r.players {
-			out = append(out, p)
-		}
+		out = r.playerList()
 	})
 	return out
 }
 
+// HasPlayer reports whether clientID is in the room. It runs on the room
+// actor; calling it from a hook, message handler or OnTick deadlocks — use
+// HasPlayerID there.
 func (r *Room[S]) HasPlayer(clientID uint64) bool {
 	var ok bool
 	r.do(func(r *Room[S]) { ok = r.hasPlayer(clientID) })
 	return ok
+}
+
+// PlayerList returns a snapshot of the current players. It reads the room
+// state directly, so it must only be called from inside the actor — module
+// hooks, message handlers and OnTick. From outside the actor use Players.
+func (r *Room[S]) PlayerList() []*Player {
+	return r.playerList()
+}
+
+// HasPlayerID reports whether clientID is in the room. It reads the room
+// state directly, so it must only be called from inside the actor. From
+// outside the actor use HasPlayer.
+func (r *Room[S]) HasPlayerID(clientID uint64) bool {
+	return r.hasPlayer(clientID)
+}
+
+// RoomInfo returns the same snapshot as Info. It reads the room state
+// directly, so it must only be called from inside the actor. From outside
+// the actor use Info.
+func (r *Room[S]) RoomInfo() protocol.RoomInfo {
+	return r.roomInfo()
+}
+
+func (r *Room[S]) playerList() []*Player {
+	out := make([]*Player, 0, len(r.players))
+	for _, p := range r.players {
+		out = append(out, p)
+	}
+	return out
+}
+
+func (r *Room[S]) roomInfo() protocol.RoomInfo {
+	return protocol.RoomInfo{
+		ID:            r.id,
+		Name:          r.config.Name,
+		Type:          r.config.Type,
+		MaxPlayers:    r.config.MaxPlayers,
+		PlayerCount:   uint16(len(r.players)),
+		IsOpen:        r.isOpen,
+		SingletonMode: r.config.SingletonMode,
+	}
 }
 
 func (r *Room[S]) hasPlayer(clientID uint64) bool {
@@ -325,8 +376,10 @@ func (r *Room[S]) HandlesOp(op uint16) bool {
 }
 
 // HandleMessage runs the module handler for op inside the actor and returns
-// its response. Callers must check HandlesOp first.
-func (r *Room[S]) HandleMessage(clientID uint64, op uint16, payload []byte) (resp protocol.Marshaler, err error) {
+// its response. ctx is passed through to the handler; it is canceled when
+// the connection closes or the server shuts down. Callers must check
+// HandlesOp first.
+func (r *Room[S]) HandleMessage(ctx context.Context, clientID uint64, op uint16, payload []byte) (resp protocol.Marshaler, err error) {
 	h := r.module.handlers[op]
 	executed := r.do(func(r *Room[S]) {
 		p, ok := r.players[clientID]
@@ -341,7 +394,7 @@ func (r *Room[S]) HandleMessage(clientID uint64, op uint16, payload []byte) (res
 				err = protocol.NewError(500, "internal error")
 			}
 		}()
-		resp, err = h(r, p, payload)
+		resp, err = h(ctx, r, p, payload)
 	})
 	if !executed {
 		return nil, ErrRoomClosed

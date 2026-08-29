@@ -1,6 +1,7 @@
 package partyx
 
 import (
+	"context"
 	"errors"
 
 	"github.com/google/uuid"
@@ -16,7 +17,7 @@ func DevAuth() Authenticator {
 
 type devAuth struct{}
 
-func (devAuth) Authenticate(token string) (*session.Session, error) {
+func (devAuth) Authenticate(ctx context.Context, token string) (*session.Session, error) {
 	if token == "" {
 		return nil, errors.New("token required")
 	}

@@ -1,6 +1,7 @@
 package room
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -25,13 +26,13 @@ func TestModuleLifecycleHooks(t *testing.T) {
 		State(func() *gameState {
 			return &gameState{players: []string{}}
 		}).
-		OnInit(func(r *Room[gameState]) {
+		OnInit(func(ctx context.Context, r *Room[gameState]) {
 			inited = true
 		}).
-		OnJoin(func(r *Room[gameState], p *Player) {
+		OnJoin(func(ctx context.Context, r *Room[gameState], p *Player) {
 			r.State.players = append(r.State.players, p.UserID)
 		}).
-		OnLeave(func(r *Room[gameState], p *Player) {
+		OnLeave(func(ctx context.Context, r *Room[gameState], p *Player) {
 			for i, id := range r.State.players {
 				if id == p.UserID {
 					r.State.players = append(r.State.players[:i], r.State.players[i+1:]...)
@@ -39,7 +40,7 @@ func TestModuleLifecycleHooks(t *testing.T) {
 				}
 			}
 		}).
-		OnClose(func(r *Room[gameState]) {
+		OnClose(func(ctx context.Context, r *Room[gameState]) {
 			close(closed)
 		})
 
@@ -74,7 +75,7 @@ func TestModuleLifecycleHooks(t *testing.T) {
 
 func TestModuleTick(t *testing.T) {
 	mod := NewModule[gameState]("test").
-		Tick(10*time.Millisecond, func(r *Room[gameState], dt time.Duration) {
+		Tick(10*time.Millisecond, func(ctx context.Context, r *Room[gameState], dt time.Duration) {
 			r.State.ticks++
 		})
 	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
@@ -126,7 +127,7 @@ func (m *guessResp) Unmarshal(data []byte) (int, error) {
 
 func TestTypedHandle(t *testing.T) {
 	mod := NewModule[gameState]("test").
-		HandleTyped(100, func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
+		Handle(100, func(ctx context.Context, r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
 			return &guessResp{OK: req.Word == "слово" && p.ID == 1}, nil
 		})
 
@@ -136,7 +137,7 @@ func TestTypedHandle(t *testing.T) {
 		t.Fatalf("join: %v", err)
 	}
 
-	resp, err := r.HandleMessage(1, 100, protocol.Encode(&guessReq{Word: "слово"}))
+	resp, err := r.HandleMessage(context.Background(), 1, 100, protocol.Encode(&guessReq{Word: "слово"}))
 	if err != nil {
 		t.Fatalf("handle: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestTypedHandle(t *testing.T) {
 		t.Fatal("response OK = false, want true")
 	}
 
-	_, err = r.HandleMessage(1, 100, protocol.Encode(&guessReq{Word: ""}))
+	_, err = r.HandleMessage(context.Background(), 1, 100, protocol.Encode(&guessReq{Word: ""}))
 	var perr *protocol.Error
 	if !errors.As(err, &perr) || perr.Code != 400 {
 		t.Fatalf("err = %v, want 400 protocol.Error", err)
@@ -158,7 +159,7 @@ func TestTypedHandle(t *testing.T) {
 func TestTypedHandleDecodeFailure(t *testing.T) {
 	// protocol.PlayerJoined is a real arpack type: Unmarshal rejects garbage.
 	mod := NewModule[gameState]("test").
-		HandleTyped(100, func(r *Room[gameState], p *Player, req *protocol.PlayerJoined) (*guessResp, error) {
+		Handle(100, func(ctx context.Context, r *Room[gameState], p *Player, req *protocol.PlayerJoined) (*guessResp, error) {
 			return &guessResp{OK: true}, nil
 		})
 
@@ -168,7 +169,7 @@ func TestTypedHandleDecodeFailure(t *testing.T) {
 		t.Fatalf("join: %v", err)
 	}
 
-	_, err := r.HandleMessage(1, 100, []byte{0xff, 0xff, 0xff, 0xff})
+	_, err := r.HandleMessage(context.Background(), 1, 100, []byte{0xff, 0xff, 0xff, 0xff})
 	var perr *protocol.Error
 	if !errors.As(err, &perr) || perr.Code != 400 {
 		t.Fatalf("err = %v, want 400 protocol.Error", err)
@@ -177,7 +178,7 @@ func TestTypedHandleDecodeFailure(t *testing.T) {
 
 func TestNilResponseYieldsEmptyPayload(t *testing.T) {
 	mod := NewModule[gameState]("test").
-		HandleTyped(100, func(r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
+		Handle(100, func(ctx context.Context, r *Room[gameState], p *Player, req *guessReq) (*guessResp, error) {
 			return nil, nil
 		})
 
@@ -187,7 +188,7 @@ func TestNilResponseYieldsEmptyPayload(t *testing.T) {
 		t.Fatalf("join: %v", err)
 	}
 
-	resp, err := r.HandleMessage(1, 100, protocol.Encode(&guessReq{Word: "x"}))
+	resp, err := r.HandleMessage(context.Background(), 1, 100, protocol.Encode(&guessReq{Word: "x"}))
 	if err != nil {
 		t.Fatalf("handle: %v", err)
 	}
@@ -198,7 +199,7 @@ func TestNilResponseYieldsEmptyPayload(t *testing.T) {
 
 func TestDuplicateOpcodePanics(t *testing.T) {
 	mod := NewModule[gameState]("test")
-	mod.Handle(100, func(r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
+	mod.HandleRaw(100, func(ctx context.Context, r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
 		return nil, nil
 	})
 	defer func() {
@@ -206,7 +207,7 @@ func TestDuplicateOpcodePanics(t *testing.T) {
 			t.Fatal("expected panic on duplicate opcode")
 		}
 	}()
-	mod.Handle(100, func(r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
+	mod.HandleRaw(100, func(ctx context.Context, r *Room[gameState], p *Player, payload []byte) (protocol.Marshaler, error) {
 		return nil, nil
 	})
 }

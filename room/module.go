@@ -1,6 +1,7 @@
 package room
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -22,21 +23,25 @@ type Module[S any] struct {
 	// newState builds the initial game state; nil means the zero value of S.
 	newState func() *S
 
-	onInit  func(r *Room[S])
-	onJoin  func(r *Room[S], p *Player)
-	onLeave func(r *Room[S], p *Player)
-	onClose func(r *Room[S])
+	// Hooks receive the room's lifetime context: it is canceled when the
+	// room shuts down, so OnClose always observes it in the done state.
+	onInit  func(ctx context.Context, r *Room[S])
+	onJoin  func(ctx context.Context, r *Room[S], p *Player)
+	onLeave func(ctx context.Context, r *Room[S], p *Player)
+	onClose func(ctx context.Context, r *Room[S])
 
 	tickRate time.Duration
-	onTick   func(r *Room[S], dt time.Duration)
+	onTick   func(ctx context.Context, r *Room[S], dt time.Duration)
 
 	handlers map[uint16]MessageHandler[S]
 }
 
 // MessageHandler processes a room-scoped message inside the room actor.
 // payload is the raw arpack-encoded request body; the returned Marshaler is
-// encoded once and sent as the response payload (nil = empty payload).
-type MessageHandler[S any] func(r *Room[S], p *Player, payload []byte) (protocol.Marshaler, error)
+// encoded once and sent as the response payload (nil = empty payload). ctx
+// is the request context: canceled when the connection closes or the server
+// shuts down.
+type MessageHandler[S any] func(ctx context.Context, r *Room[S], p *Player, payload []byte) (protocol.Marshaler, error)
 
 // NewModule starts the definition of a room type. typ is matched against
 // CreateRoomRequest.Type.
@@ -64,39 +69,43 @@ func (m *Module[S]) Singleton(mode protocol.SingletonMode) *Module[S] {
 	return m
 }
 
-// OnInit runs synchronously at construction, before the room is shared.
-func (m *Module[S]) OnInit(fn func(r *Room[S])) *Module[S] {
+// OnInit runs synchronously at construction, before the room is shared. ctx
+// is the room's lifetime context.
+func (m *Module[S]) OnInit(fn func(ctx context.Context, r *Room[S])) *Module[S] {
 	m.onInit = fn
 	return m
 }
 
-// OnJoin runs in the same serialized step as the player add.
-func (m *Module[S]) OnJoin(fn func(r *Room[S], p *Player)) *Module[S] {
+// OnJoin runs in the same serialized step as the player add. ctx is the
+// room's lifetime context.
+func (m *Module[S]) OnJoin(fn func(ctx context.Context, r *Room[S], p *Player)) *Module[S] {
 	m.onJoin = fn
 	return m
 }
 
-func (m *Module[S]) OnLeave(fn func(r *Room[S], p *Player)) *Module[S] {
+func (m *Module[S]) OnLeave(fn func(ctx context.Context, r *Room[S], p *Player)) *Module[S] {
 	m.onLeave = fn
 	return m
 }
 
-func (m *Module[S]) OnClose(fn func(r *Room[S])) *Module[S] {
+// OnClose runs when the room shuts down; ctx is already canceled, which is
+// the documented way to observe the shutdown inside the hook.
+func (m *Module[S]) OnClose(fn func(ctx context.Context, r *Room[S])) *Module[S] {
 	m.onClose = fn
 	return m
 }
 
 // Tick enables the game loop: fn runs inside the actor every rate; dt is the
-// time since the previous tick.
-func (m *Module[S]) Tick(rate time.Duration, fn func(r *Room[S], dt time.Duration)) *Module[S] {
+// time since the previous tick. ctx is the room's lifetime context.
+func (m *Module[S]) Tick(rate time.Duration, fn func(ctx context.Context, r *Room[S], dt time.Duration)) *Module[S] {
 	m.tickRate = rate
 	m.onTick = fn
 	return m
 }
 
-// Handle registers a raw (bytes-in, Marshaler-out) handler; most code should
-// use HandleTyped. Panics on a duplicate opcode.
-func (m *Module[S]) Handle(op uint16, h MessageHandler[S]) *Module[S] {
+// HandleRaw registers a raw (bytes-in, Marshaler-out) handler; most code
+// should use Handle. Panics on a duplicate opcode.
+func (m *Module[S]) HandleRaw(op uint16, h MessageHandler[S]) *Module[S] {
 	if m.handlers == nil {
 		m.handlers = make(map[uint16]MessageHandler[S])
 	}
@@ -107,21 +116,21 @@ func (m *Module[S]) Handle(op uint16, h MessageHandler[S]) *Module[S] {
 	return m
 }
 
-// HandleTyped registers a typed message handler: the payload is decoded
+// Handle registers a typed message handler: the payload is decoded
 // into Req (an empty payload yields a zero Req), Validate() is called when
 // Req implements it (failures map to a 400 error), and the response is
 // encoded by the framework (a nil response means an empty payload). Panics
 // on a duplicate opcode. All type parameters are inferred from fn.
-func (m *Module[S]) HandleTyped[Req, Resp any, PReq interface {
+func (m *Module[S]) Handle[Req, Resp any, PReq interface {
 	*Req
 	protocol.Unmarshaler
 }, PResp interface {
 	*Resp
 	protocol.Marshaler
-}](op uint16, fn func(r *Room[S], p *Player, req PReq) (PResp, error)) *Module[S] {
-	return m.Handle(op, func(r *Room[S], p *Player, payload []byte) (protocol.Marshaler, error) {
+}](op uint16, fn func(ctx context.Context, r *Room[S], p *Player, req PReq) (PResp, error)) *Module[S] {
+	return m.HandleRaw(op, func(ctx context.Context, r *Room[S], p *Player, payload []byte) (protocol.Marshaler, error) {
 		return protocol.Call(payload, func(req PReq) (PResp, error) {
-			return fn(r, p, req)
+			return fn(ctx, r, p, req)
 		})
 	})
 }
@@ -130,7 +139,9 @@ func (m *Module[S]) HandleTyped[Req, Resp any, PReq interface {
 type AnyRoom interface {
 	ID() string
 	Config() RoomConfig
-	Info() protocol.RoomInfo
+	// Info returns a room snapshot, or ErrRoomClosed if the room is already
+	// shut down. It runs on the room actor.
+	Info() (protocol.RoomInfo, error)
 	Join(clientID uint64, userID string) error
 	JoinReplace(oldClientID, clientID uint64, userID string) error
 	Leave(clientID uint64)
@@ -139,7 +150,9 @@ type AnyRoom interface {
 	IsOpen() bool
 	Shutdown()
 	HandlesOp(op uint16) bool
-	HandleMessage(clientID uint64, op uint16, payload []byte) (protocol.Marshaler, error)
+	// HandleMessage runs the matching module handler inside the room actor;
+	// ctx is passed through to the handler.
+	HandleMessage(ctx context.Context, clientID uint64, op uint16, payload []byte) (protocol.Marshaler, error)
 	setOnEmpty(func(string))
 }
 

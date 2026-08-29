@@ -1,6 +1,7 @@
 package partyx
 
 import (
+	"context"
 	"time"
 
 	"github.com/damirlut/go-partyx/protocol"
@@ -14,8 +15,8 @@ import (
 //		State(func() *WordState { return &WordState{Round: 1} }).
 //		MaxPlayers(2).
 //		Singleton(protocol.SingletonReject).
-//		OnJoin(func(r *room.Room[WordState], p *room.Player) { ... }).
-//		HandleTyped(uint16(messages.GameOpGuess), guessHandler).
+//		OnJoin(func(ctx context.Context, r *room.Room[WordState], p *room.Player) { ... }).
+//		Handle(uint16(messages.GameOpGuess), guessHandler).
 //		Register(app)
 //
 // The state type must be named explicitly: Go cannot infer it from the
@@ -50,55 +51,58 @@ func (b *RoomBuilder[S]) Singleton(mode protocol.SingletonMode) *RoomBuilder[S] 
 	return b
 }
 
-// OnInit runs synchronously at construction, before the room is shared.
-func (b *RoomBuilder[S]) OnInit(fn func(r *room.Room[S])) *RoomBuilder[S] {
+// OnInit runs synchronously at construction, before the room is shared. ctx
+// is the room's lifetime context.
+func (b *RoomBuilder[S]) OnInit(fn func(ctx context.Context, r *room.Room[S])) *RoomBuilder[S] {
 	b.module.OnInit(fn)
 	return b
 }
 
-// OnJoin runs in the same serialized step as the player add.
-func (b *RoomBuilder[S]) OnJoin(fn func(r *room.Room[S], p *room.Player)) *RoomBuilder[S] {
+// OnJoin runs in the same serialized step as the player add. ctx is the
+// room's lifetime context.
+func (b *RoomBuilder[S]) OnJoin(fn func(ctx context.Context, r *room.Room[S], p *room.Player)) *RoomBuilder[S] {
 	b.module.OnJoin(fn)
 	return b
 }
 
-func (b *RoomBuilder[S]) OnLeave(fn func(r *room.Room[S], p *room.Player)) *RoomBuilder[S] {
+func (b *RoomBuilder[S]) OnLeave(fn func(ctx context.Context, r *room.Room[S], p *room.Player)) *RoomBuilder[S] {
 	b.module.OnLeave(fn)
 	return b
 }
 
-func (b *RoomBuilder[S]) OnClose(fn func(r *room.Room[S])) *RoomBuilder[S] {
+// OnClose runs when the room shuts down; ctx is already canceled.
+func (b *RoomBuilder[S]) OnClose(fn func(ctx context.Context, r *room.Room[S])) *RoomBuilder[S] {
 	b.module.OnClose(fn)
 	return b
 }
 
 // Tick enables the game loop: fn runs inside the actor every rate; dt is the
-// time since the previous tick.
-func (b *RoomBuilder[S]) Tick(rate time.Duration, fn func(r *room.Room[S], dt time.Duration)) *RoomBuilder[S] {
+// time since the previous tick. ctx is the room's lifetime context.
+func (b *RoomBuilder[S]) Tick(rate time.Duration, fn func(ctx context.Context, r *room.Room[S], dt time.Duration)) *RoomBuilder[S] {
 	b.module.Tick(rate, fn)
 	return b
 }
 
-// Handle registers a raw (bytes-in, Marshaler-out) handler; most code should
-// use HandleTyped. Panics on a duplicate opcode.
-func (b *RoomBuilder[S]) Handle(op uint16, h room.MessageHandler[S]) *RoomBuilder[S] {
-	b.module.Handle(op, h)
+// HandleRaw registers a raw (bytes-in, Marshaler-out) handler; most code
+// should use Handle. Panics on a duplicate opcode.
+func (b *RoomBuilder[S]) HandleRaw(op uint16, h room.MessageHandler[S]) *RoomBuilder[S] {
+	b.module.HandleRaw(op, h)
 	return b
 }
 
-// HandleTyped registers a typed message handler: the payload is decoded into
-// Req (an empty payload yields a zero Req), Validate() is called when Req
-// implements it (failures map to a 400 error), and the response is encoded
-// by the framework (a nil response means an empty payload). Panics on a
-// duplicate opcode. All type parameters are inferred from fn.
-func (b *RoomBuilder[S]) HandleTyped[Req, Resp any, PReq interface {
+// Handle registers a typed message handler: the payload is decoded into
+// Req (an empty payload yields a zero Req), Validate() is called when
+// Req implements it (failures map to a 400 error), and the response is
+// encoded by the framework (a nil response means an empty payload). Panics
+// on a duplicate opcode. All type parameters are inferred from fn.
+func (b *RoomBuilder[S]) Handle[Req, Resp any, PReq interface {
 	*Req
 	protocol.Unmarshaler
 }, PResp interface {
 	*Resp
 	protocol.Marshaler
-}](op uint16, fn func(r *room.Room[S], p *room.Player, req PReq) (PResp, error)) *RoomBuilder[S] {
-	b.module.HandleTyped(op, fn)
+}](op uint16, fn func(ctx context.Context, r *room.Room[S], p *room.Player, req PReq) (PResp, error)) *RoomBuilder[S] {
+	b.module.Handle(op, fn)
 	return b
 }
 

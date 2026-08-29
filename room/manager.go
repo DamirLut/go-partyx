@@ -1,6 +1,7 @@
 package room
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"sync"
@@ -97,8 +98,9 @@ func (m *Manager) Create(config RoomConfig) AnyRoom {
 	m.rooms[r.ID()] = r
 	m.mu.Unlock()
 
-	info := r.Info()
-	m.bus.Publish("lobby", eventbus.NewEvent(uint16(protocol.EventRoomCreated), &info))
+	if info, err := r.Info(); err == nil {
+		m.bus.Publish("lobby", eventbus.NewEvent(uint16(protocol.EventRoomCreated), &info))
+	}
 	return r
 }
 
@@ -120,8 +122,8 @@ func (m *Manager) List() []protocol.RoomInfo {
 	// Info() blocks on each room actor; do it outside the manager lock.
 	result := make([]protocol.RoomInfo, 0, len(rooms))
 	for _, r := range rooms {
-		info := r.Info()
-		if info.ID == "" {
+		info, err := r.Info()
+		if err != nil {
 			continue // room was removed concurrently
 		}
 		result = append(result, info)
@@ -218,7 +220,12 @@ func (m *Manager) JoinRoom(userID string, clientID uint64, roomID string) (proto
 		return protocol.RoomInfo{}, joinErr
 	}
 
-	return r.Info(), nil
+	info, err := r.Info()
+	if err != nil {
+		// The room was removed right after a successful join.
+		return protocol.RoomInfo{}, ErrRoomNotFound
+	}
+	return info, nil
 }
 
 func (m *Manager) LeaveRoom(userID string, clientID uint64, roomID string) {
@@ -248,9 +255,10 @@ func (m *Manager) LeaveRoom(userID string, clientID uint64, roomID string) {
 }
 
 // DispatchRoomMessage routes a room-scoped request to the client's room of
-// the opcode's type. handled is false when no module claims the opcode — the
-// caller then reports "method not found".
-func (m *Manager) DispatchRoomMessage(clientID uint64, op uint16, payload []byte, clientRoomIDs []string) (resp protocol.Marshaler, err error, handled bool) {
+// the opcode's type; ctx is passed through to the module handler. handled is
+// false when no module claims the opcode — the caller then reports "method
+// not found".
+func (m *Manager) DispatchRoomMessage(ctx context.Context, clientID uint64, op uint16, payload []byte, clientRoomIDs []string) (resp protocol.Marshaler, err error, handled bool) {
 	typ, ok := m.OpType(op)
 	if !ok {
 		return nil, nil, false
@@ -271,7 +279,7 @@ func (m *Manager) DispatchRoomMessage(clientID uint64, op uint16, payload []byte
 	case 0:
 		return nil, ErrNotInRoom, true
 	case 1:
-		resp, err := match.HandleMessage(clientID, op, payload)
+		resp, err := match.HandleMessage(ctx, clientID, op, payload)
 		return resp, err, true
 	default:
 		return nil, ErrAmbiguousRoom, true
