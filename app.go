@@ -149,7 +149,10 @@ func (a *App) Engine() *gin.Engine {
 	return a.engine
 }
 
-// Run serves until ctx is canceled, then shuts down gracefully:
+// Run serves until ctx is canceled, then tears everything down gracefully:
+// the HTTP listener stops, every WebSocket client is disconnected (their
+// OnDisconnect cleanup runs), and all room actors are shut down so their
+// OnClose hooks fire. Returns nil after a graceful shutdown:
 //
 //	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 //	defer stop()

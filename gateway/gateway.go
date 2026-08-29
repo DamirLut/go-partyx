@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -102,6 +103,16 @@ type Gateway struct {
 	tuning     tuning
 	dispatcher *Dispatcher
 	upgrader   websocket.Upgrader
+
+	// baseCtx is the context passed to Run; every connection derives its
+	// context from it. Defaults to context.Background so the gateway also
+	// works when the engine is driven directly (tests) without Run.
+	baseCtx context.Context
+
+	mu      sync.Mutex
+	clients map[*Client]struct{}
+	srv     *http.Server
+	wg      sync.WaitGroup // active client read loops
 }
 
 func New(config Config) *Gateway {
@@ -132,6 +143,8 @@ func New(config Config) *Gateway {
 			WriteBufferSize: 1024,
 			CheckOrigin:     config.CheckOrigin,
 		},
+		baseCtx: context.Background(),
+		clients: make(map[*Client]struct{}),
 	}
 	g.setupRoutes()
 	return g
@@ -147,16 +160,42 @@ func (g *Gateway) handleWebSocket(c *gin.Context) {
 		return
 	}
 
-	client := NewClient(conn, g.config.Bus, g.tuning)
-	go client.ReadLoop(g.dispatcher)
+	client := NewClient(g.baseCtx, conn, g.config.Bus, g.tuning)
+	g.register(client)
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		client.ReadLoop(g.dispatcher)
+		g.unregister(client)
+	}()
 }
 
-// Run serves until ctx is canceled, then shuts down gracefully.
+func (g *Gateway) register(c *Client) {
+	g.mu.Lock()
+	g.clients[c] = struct{}{}
+	g.mu.Unlock()
+}
+
+func (g *Gateway) unregister(c *Client) {
+	g.mu.Lock()
+	delete(g.clients, c)
+	g.mu.Unlock()
+}
+
+// Run serves until ctx is canceled, then tears everything down gracefully:
+// the HTTP listener stops, every client connection is closed (read loops
+// unwind and OnDisconnect moves players out of rooms), and finally all room
+// actors are shut down so their OnClose hooks run. Returns nil after a
+// graceful shutdown.
 func (g *Gateway) Run(ctx context.Context) error {
+	g.baseCtx = ctx
 	srv := &http.Server{
 		Addr:    g.config.Addr,
 		Handler: g.config.Engine,
 	}
+	g.mu.Lock()
+	g.srv = srv
+	g.mu.Unlock()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -165,10 +204,43 @@ func (g *Gateway) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		g.shutdown()
+		return nil
 	case err := <-errCh:
+		// The server died (port busy, listener closed): tear down whatever
+		// came up and report the failure.
+		g.shutdown()
 		return err
 	}
+}
+
+// shutdown unwinds the gateway in dependency order: HTTP listener, then
+// client connections, then room actors. It is safe to call once, from Run.
+func (g *Gateway) shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), g.tuning.shutdownTimeout)
+	defer cancel()
+
+	if g.srv != nil {
+		// Stops accepting and waits for plain HTTP handlers. WebSocket
+		// connections are hijacked — they are closed explicitly below.
+		g.srv.Shutdown(ctx)
+	}
+
+	g.mu.Lock()
+	clients := make([]*Client, 0, len(g.clients))
+	for c := range g.clients {
+		clients = append(clients, c)
+	}
+	g.clients = make(map[*Client]struct{})
+	g.mu.Unlock()
+
+	// Close is graceful: each WriteLoop flushes queued messages, then the
+	// connection closes and the read loop unwinds into OnDisconnect.
+	for _, c := range clients {
+		c.Close()
+	}
+	g.wg.Wait()
+
+	// Rooms last, so in-flight handlers still find their room actors alive.
+	g.config.Rooms.ShutdownAll()
 }

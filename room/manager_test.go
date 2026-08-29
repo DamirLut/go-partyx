@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/damirlut/go-partyx/eventbus"
 	"github.com/damirlut/go-partyx/protocol"
@@ -322,6 +323,47 @@ func TestDuplicateModuleTypePanics(t *testing.T) {
 		}
 	}()
 	m.RegisterModule(NewModule[gameState]("duel"))
+}
+
+// ShutdownAll must shut down every room — firing OnClose — and empty the
+// registry, including singleton records.
+func TestShutdownAllFiresOnCloseAndClearsState(t *testing.T) {
+	m := newTestManager()
+	closed := make(chan struct{}, 2)
+	m.RegisterModule(NewModule[gameState]("duel").
+		Singleton(protocol.SingletonReject).
+		OnClose(func(ctx context.Context, r *Room[gameState]) { closed <- struct{}{} }))
+
+	r1 := m.Create(RoomConfig{Type: "duel"})
+	r2 := m.Create(RoomConfig{Type: "duel"})
+	if _, err := m.JoinRoom("alice", 1, r1.ID()); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+
+	m.ShutdownAll()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-closed:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("OnClose fired %d times, want 2", i)
+		}
+	}
+	if _, ok := m.Find(r1.ID()); ok {
+		t.Fatal("r1 still registered after ShutdownAll")
+	}
+	if _, ok := m.Find(r2.ID()); ok {
+		t.Fatal("r2 still registered after ShutdownAll")
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("List() = %v, want empty", m.List())
+	}
+	// Singleton records were cleared: the user can join another room of the type.
+	r3 := m.Create(RoomConfig{Type: "duel"})
+	defer m.Remove(r3.ID())
+	if _, err := m.JoinRoom("alice", 2, r3.ID()); err != nil {
+		t.Fatalf("join r3 after ShutdownAll: %v", err)
+	}
 }
 
 func TestDuplicateModuleOpcodePanics(t *testing.T) {

@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
@@ -484,5 +486,94 @@ func TestSlowHandlerDoesNotStallReadLoop(t *testing.T) {
 	close(release)
 	if msg := readUntilID(t, c, 1); msg.Type != protocol.MessageResponse {
 		t.Fatalf("slow handler response: %+v, want response", msg)
+	}
+}
+
+// TestRunShutdownTearsEverythingDown: canceling the Run context stops the
+// listener, closes client connections and shuts down room actors so OnClose
+// hooks fire.
+func TestRunShutdownTearsEverythingDown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Reserve a port for Run's own http.Server.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+
+	bus := eventbus.New(nil)
+	rooms := room.NewManager(bus, nil)
+	commands := command.NewRegistry()
+	handlers.RegisterRoomHandlers(commands, rooms)
+	handlers.RegisterLobbyHandlers(commands, lobby.New(rooms))
+
+	onClosed := make(chan struct{}, 1)
+	mod := room.NewModule[echoState]("echo").
+		OnClose(func(ctx context.Context, r *room.Room[echoState]) { onClosed <- struct{}{} })
+	rooms.RegisterModule(mod)
+
+	engine := gin.New()
+	gw := New(Config{
+		Engine:        engine,
+		Addr:          addr,
+		Bus:           bus,
+		Commands:      commands,
+		Sessions:      session.NewStore(),
+		Authenticator: testAuth{},
+		Rooms:         rooms,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- gw.Run(ctx) }()
+
+	// Dial with retries until Run's listener is up.
+	var conn *websocket.Conn
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn, _, err = websocket.DefaultDialer.Dial(fmt.Sprintf("ws://%s/ws", addr), nil)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dial: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	auth(t, conn, "alice")
+	created := createRoom(t, conn, 1, &protocol.CreateRoomRequest{Type: "echo"})
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run returned %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after ctx cancel")
+	}
+
+	// OnClose fired for the room.
+	select {
+	case <-onClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnClose did not fire on server shutdown")
+	}
+
+	// The room registry is empty.
+	if _, ok := rooms.Find(created.ID); ok {
+		t.Fatal("room was not removed on shutdown")
+	}
+
+	// The client connection is closed.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("client connection was not closed on shutdown")
 	}
 }

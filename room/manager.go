@@ -154,6 +154,24 @@ func (m *Manager) Remove(id string) {
 	m.bus.Publish("lobby", eventbus.NewEvent(uint16(protocol.EventRoomRemoved), &protocol.RoomRemoved{ID: id}))
 }
 
+// ShutdownAll shuts down every room (their OnClose hooks run) and clears the
+// manager state. Used on server shutdown: lobby events are not published —
+// the process is going down and nobody is listening.
+func (m *Manager) ShutdownAll() {
+	m.mu.Lock()
+	rooms := make([]AnyRoom, 0, len(m.rooms))
+	for id, r := range m.rooms {
+		rooms = append(rooms, r)
+		delete(m.rooms, id)
+	}
+	m.userSessions = make(map[string]map[string]*sessionInfo)
+	m.mu.Unlock()
+
+	for _, r := range rooms {
+		r.Shutdown()
+	}
+}
+
 func (m *Manager) JoinRoom(userID string, clientID uint64, roomID string) (protocol.RoomInfo, error) {
 	m.mu.Lock()
 	r, ok := m.rooms[roomID]

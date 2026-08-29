@@ -60,12 +60,13 @@ type Client struct {
 	closeOnce sync.Once
 }
 
-// NewClient starts a connection. Missing tuning fields fall back to the
-// package defaults.
-func NewClient(conn *websocket.Conn, bus *eventbus.EventBus, t tuning) *Client {
+// NewClient starts a connection scoped to parent: when the gateway shuts
+// down (parent canceled) or the client closes, ctx is canceled. Missing
+// tuning fields fall back to the package defaults.
+func NewClient(parent context.Context, conn *websocket.Conn, bus *eventbus.EventBus, t tuning) *Client {
 	t = t.withDefaults()
 	id := nextClientID.Add(1)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	c := &Client{
 		id:      id,
 		conn:    conn,
