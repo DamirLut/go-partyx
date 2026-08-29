@@ -31,9 +31,14 @@ wires all subsystems, accessors expose them (`App.Rooms()`, `App.Bus()`,
 `App.Commands()`, `App.Sessions()`, `App.Engine()`), and helpers
 (`App.Handle`, the `partyx.Room[S]` builder) register game logic.
 
+The consumer owns the gin engine: it is passed to `Config.Engine` (required)
+and the gateway mounts its WebSocket route on it (`Config.WSPath`, default
+`/ws`). Middleware on the engine wraps the WS handshake too.
+
 ## Wire Protocol
 
-One WebSocket endpoint (`/ws`). Every binary frame is one arpack-encoded
+One WebSocket endpoint (`/ws` by default — `Config.WSPath`). Every binary
+frame is one arpack-encoded
 message — the envelope is itself in the schema (`protocol/schema.go`):
 
 ```go

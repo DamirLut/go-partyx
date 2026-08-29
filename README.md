@@ -29,11 +29,15 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/gin-gonic/gin"
+
 	partyx "github.com/damirlut/go-partyx"
 )
 
 func main() {
+	engine := gin.Default() // your engine: middleware and HTTP routes
 	app := partyx.New(partyx.Config{
+		Engine:        engine,
 		Addr:          ":8080",
 		Authenticator: partyx.DevAuth(), // dev only
 		CheckOrigin:   func(r *http.Request) bool { return true }, // dev only
@@ -55,7 +59,8 @@ builder, DevAuth); subpackages are subsystems (`protocol`, `gateway`,
 
 ## Protocol
 
-One endpoint — `ws://localhost:8080/ws`. Every WS binary frame is one
+One endpoint — `ws://localhost:8080/ws` (path: `Config.WSPath`). Every WS
+binary frame is one
 arpack message: `ClientMessage` from the client, `ServerMessage` from the
 server. The schema lives in `protocol/schema.go`; client bindings
 (TS/C#/Lua) are generated from it too.

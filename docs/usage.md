@@ -12,6 +12,7 @@ A complete working server (`go get github.com/damirlut/go-partyx`):
 
 ```go
 app := partyx.New(partyx.Config{
+    Engine:        gin.New(),
     Addr:          ":8080",
     Authenticator: partyx.DevAuth(), // dev only, see section 2
 })
@@ -30,14 +31,34 @@ Config:
 
 | Field | Default | Purpose |
 |-------|---------|---------|
+| `Engine` | required | Your gin engine — the framework mounts the WS route on it; add middleware and custom HTTP routes to it before `New` |
+| `WSPath` | `"/ws"` | WebSocket endpoint path |
 | `Addr` | `":8080"` | HTTP/WebSocket listen address |
 | `Authenticator` | `DevAuth()` + a log warning | Token validation |
 | `CheckOrigin` | `nil` (same-origin, safe) | WebSocket Origin check |
 | `DisableDefaultHandlers` | `false` | Turn off built-in methods |
 
+You own the gin engine, so plain gin idioms work for the HTTP side:
+
+```go
+engine := gin.Default()
+engine.Use(requestLogger())
+engine.Use(rateLimiter()) // wraps the /ws upgrade too
+
+app := partyx.New(partyx.Config{
+	Engine:        engine,
+	WSPath:        "/api/v1/ws", // optional
+	Addr:          ":8080",
+	Authenticator: partyx.DevAuth(), // dev only
+})
+
+engine.GET("/healthz", func(c *gin.Context) { c.Status(200) })
+log.Fatal(app.Run(ctx))
+```
+
 Subsystem accessors for advanced wiring: `app.Rooms()`, `app.Bus()`,
-`app.Commands()`, `app.Sessions()`, `app.Lobby()`, `app.Engine()` (gin —
-custom HTTP routes and middleware).
+`app.Commands()`, `app.Sessions()`, `app.Lobby()`, `app.Engine()` (the
+engine from `Config`).
 
 ## 1. Custom Messages and Code Generation
 
@@ -301,7 +322,8 @@ gateway puts a session on auth and removes it on disconnect.
 ## 7. Wire Protocol (Brief)
 
 The full picture — `protocol/schema.go` and `docs/architecture.md`. One
-endpoint `/ws`, binary `ClientMessage`/`ServerMessage` frames. Types:
+endpoint (`/ws` by default — `WSPath`), binary `ClientMessage`/`ServerMessage`
+frames. Types:
 `auth` / `subscribe` / `unsubscribe` / `request` from the client;
 `response` / `error` / `event` from the server. Error codes:
 400/401/404/409/410/500. Connection limits: frame ≤ 64 KB, auth timeout
@@ -334,7 +356,8 @@ Samples in this repository:
   tested synchronously: `Join`/`Leave`/`HandleMessage` are deterministic),
   `room/manager_test.go` (singleton modes, routing),
   `eventbus/eventbus_test.go`;
-- integration: `gateway/gateway_test.go` — starts a server via
-  `httptest.NewServer(gw.Engine())` and drives a real WebSocket client with
+- integration: `gateway/gateway_test.go` — builds a gin engine, hands it to
+  `gateway.Config` and starts it via `httptest.NewServer(engine)`, driving a
+  real WebSocket client with
   binary frames through the whole protocol, including a room-scoped module
   (`TestRoomModuleFlow`). Copy this pattern for your own commands.
