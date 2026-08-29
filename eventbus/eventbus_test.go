@@ -32,7 +32,7 @@ func (s *testSub) count() int {
 }
 
 func TestPublishDelivers(t *testing.T) {
-	b := New()
+	b := New(nil)
 	sub := &testSub{id: 1}
 	b.Subscribe("room:1", sub)
 
@@ -55,7 +55,7 @@ func TestPublishDelivers(t *testing.T) {
 }
 
 func TestPublishUnknownTopic(t *testing.T) {
-	b := New()
+	b := New(nil)
 	b.Publish("missing", NewEvent(1, nil)) // must not panic
 }
 
@@ -67,7 +67,7 @@ func TestNilMessageYieldsEmptyPayload(t *testing.T) {
 }
 
 func TestUnsubscribeStopsDelivery(t *testing.T) {
-	b := New()
+	b := New(nil)
 	sub := &testSub{id: 1}
 	b.Subscribe("room:1", sub)
 	b.Unsubscribe("room:1", sub)
@@ -79,7 +79,7 @@ func TestUnsubscribeStopsDelivery(t *testing.T) {
 }
 
 func TestEmptyTopicIsRemoved(t *testing.T) {
-	b := New()
+	b := New(nil)
 	sub := &testSub{id: 1}
 	b.Subscribe("room:1", sub)
 	b.Unsubscribe("room:1", sub)
@@ -90,7 +90,7 @@ func TestEmptyTopicIsRemoved(t *testing.T) {
 }
 
 func TestTopicWithSubscribersIsKept(t *testing.T) {
-	b := New()
+	b := New(nil)
 	s1 := &testSub{id: 1}
 	s2 := &testSub{id: 2}
 	b.Subscribe("room:1", s1)
@@ -107,7 +107,7 @@ func TestTopicWithSubscribersIsKept(t *testing.T) {
 }
 
 func TestPanickingSubscriberDoesNotBreakPublish(t *testing.T) {
-	b := New()
+	b := New(nil)
 	bad := &testSub{id: 1, panics: true}
 	good := &testSub{id: 2}
 	b.Subscribe("room:1", bad)

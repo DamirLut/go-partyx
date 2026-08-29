@@ -7,7 +7,7 @@ package partyx
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -37,6 +37,10 @@ type Config struct {
 	WSPath string
 	// Turns off the built-in room.*/lobby.* methods.
 	DisableDefaultHandlers bool
+
+	// nil falls back to slog.Default(). All library logging — hook panics,
+	// slow-consumer disconnects, the DevAuth warning — goes through it.
+	Logger *slog.Logger
 }
 
 // App is the framework facade owning the gateway and all subsystems.
@@ -51,9 +55,14 @@ type App struct {
 }
 
 func New(cfg Config) *App {
-	bus := eventbus.New()
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	bus := eventbus.New(logger)
 	sessions := session.NewStore()
-	rooms := room.NewManager(bus)
+	rooms := room.NewManager(bus, logger)
 	l := lobby.New(rooms)
 	commands := command.NewRegistry()
 
@@ -69,7 +78,7 @@ func New(cfg Config) *App {
 
 	auth := cfg.Authenticator
 	if auth == nil {
-		log.Println("partyx: no Authenticator configured, falling back to DevAuth — do not use in production")
+		logger.Warn("partyx: no Authenticator configured, falling back to DevAuth — do not use in production")
 		auth = DevAuth()
 	}
 
@@ -83,6 +92,7 @@ func New(cfg Config) *App {
 		Authenticator: auth,
 		Rooms:         rooms,
 		CheckOrigin:   cfg.CheckOrigin,
+		Logger:        logger,
 	})
 
 	return &App{

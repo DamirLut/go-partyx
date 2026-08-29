@@ -44,7 +44,7 @@ func TestModuleLifecycleHooks(t *testing.T) {
 			close(closed)
 		})
 
-	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
+	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New(nil), nil)
 
 	if !inited {
 		t.Fatal("OnInit was not called")
@@ -78,7 +78,7 @@ func TestModuleTick(t *testing.T) {
 		Tick(10*time.Millisecond, func(ctx context.Context, r *Room[gameState], dt time.Duration) {
 			r.State.ticks++
 		})
-	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
+	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New(nil), nil)
 	defer r.Shutdown()
 
 	waitFor(t, "at least 2 ticks", func() bool {
@@ -131,7 +131,7 @@ func TestTypedHandle(t *testing.T) {
 			return &guessResp{OK: req.Word == "слово" && p.ID == 1}, nil
 		})
 
-	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
+	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New(nil), nil)
 	defer r.Shutdown()
 	if err := r.Join(1, "alice"); err != nil {
 		t.Fatalf("join: %v", err)
@@ -163,7 +163,7 @@ func TestTypedHandleDecodeFailure(t *testing.T) {
 			return &guessResp{OK: true}, nil
 		})
 
-	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
+	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New(nil), nil)
 	defer r.Shutdown()
 	if err := r.Join(1, "alice"); err != nil {
 		t.Fatalf("join: %v", err)
@@ -182,7 +182,7 @@ func TestNilResponseYieldsEmptyPayload(t *testing.T) {
 			return nil, nil
 		})
 
-	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New())
+	r := newRoom(RoomConfig{Name: "g", Type: "test"}, mod, eventbus.New(nil), nil)
 	defer r.Shutdown()
 	if err := r.Join(1, "alice"); err != nil {
 		t.Fatalf("join: %v", err)

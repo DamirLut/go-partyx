@@ -36,8 +36,8 @@ func newTestServer(t *testing.T, setup func(rooms *room.Manager, commands *comma
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	bus := eventbus.New()
-	rooms := room.NewManager(bus)
+	bus := eventbus.New(nil)
+	rooms := room.NewManager(bus, nil)
 	l := lobby.New(rooms)
 	commands := command.NewRegistry()
 	handlers.RegisterRoomHandlers(commands, rooms)
@@ -415,8 +415,8 @@ func TestSubscribeReceivesLobbyEvents(t *testing.T) {
 func TestCustomWSPathAndMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	bus := eventbus.New()
-	rooms := room.NewManager(bus)
+	bus := eventbus.New(nil)
+	rooms := room.NewManager(bus, nil)
 	commands := command.NewRegistry()
 	handlers.RegisterRoomHandlers(commands, rooms)
 	handlers.RegisterLobbyHandlers(commands, lobby.New(rooms))

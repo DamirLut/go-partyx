@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -31,6 +32,9 @@ type Config struct {
 	// nil means the gorilla/websocket same-origin default. Allow all origins
 	// only in dev.
 	CheckOrigin func(r *http.Request) bool
+
+	// nil falls back to slog.Default().
+	Logger *slog.Logger
 }
 
 // Gateway is the transport layer: HTTP + WebSocket, auth, dispatching and
@@ -47,6 +51,10 @@ func New(config Config) *Gateway {
 	}
 	if config.WSPath == "" {
 		config.WSPath = "/ws"
+	}
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 	g := &Gateway{
 		config: config,

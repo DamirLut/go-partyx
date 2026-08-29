@@ -2,7 +2,7 @@ package gateway
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +38,7 @@ type Client struct {
 	topics  map[string]struct{}
 	roomIDs map[string]struct{}
 	bus     *eventbus.EventBus
+	logger  *slog.Logger
 
 	// ctx lives for the connection; canceled by Close. Request handlers get
 	// it (directly or derived).
@@ -62,6 +63,7 @@ func NewClient(conn *websocket.Conn, bus *eventbus.EventBus) *Client {
 		topics:  make(map[string]struct{}),
 		roomIDs: make(map[string]struct{}),
 		bus:     bus,
+		logger:  slog.Default(),
 		ctx:     ctx,
 		cancel:  cancel,
 		done:    make(chan struct{}),
@@ -101,7 +103,7 @@ func (c *Client) SendServerMessage(msg *protocol.ServerMessage) {
 	case <-c.done:
 	default:
 		// Slow consumer policy: disconnect instead of silently dropping messages.
-		log.Printf("client %d: send buffer full, disconnecting", c.id)
+		c.logger.Warn("client: send buffer full, disconnecting", "client", c.id)
 		c.Close()
 	}
 }

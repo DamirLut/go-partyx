@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/damirlut/go-partyx/eventbus"
@@ -160,7 +161,7 @@ type AnyRoom interface {
 type AnyModule interface {
 	RoomType() string
 	BaseConfig() RoomConfig
-	Create(config RoomConfig, bus *eventbus.EventBus) AnyRoom
+	Create(config RoomConfig, bus *eventbus.EventBus, logger *slog.Logger) AnyRoom
 	Ops() []uint16
 }
 
@@ -168,8 +169,8 @@ func (m *Module[S]) RoomType() string { return m.typ }
 
 func (m *Module[S]) BaseConfig() RoomConfig { return m.config }
 
-func (m *Module[S]) Create(config RoomConfig, bus *eventbus.EventBus) AnyRoom {
-	return newRoom(config, m, bus)
+func (m *Module[S]) Create(config RoomConfig, bus *eventbus.EventBus, logger *slog.Logger) AnyRoom {
+	return newRoom(config, m, bus, logger)
 }
 
 func (m *Module[S]) Ops() []uint16 {

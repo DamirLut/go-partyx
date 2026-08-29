@@ -2,7 +2,7 @@ package room
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -38,13 +38,17 @@ type Room[S any] struct {
 	inbox   chan func(*Room[S])
 	bus     *eventbus.EventBus
 	onEmpty func(string)
+	logger  *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-func newRoom[S any](config RoomConfig, module *Module[S], bus *eventbus.EventBus) *Room[S] {
+func newRoom[S any](config RoomConfig, module *Module[S], bus *eventbus.EventBus, logger *slog.Logger) *Room[S] {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	state := new(S)
 	if module.newState != nil {
@@ -61,6 +65,7 @@ func newRoom[S any](config RoomConfig, module *Module[S], bus *eventbus.EventBus
 		isOpen:  true,
 		inbox:   make(chan func(*Room[S]), 64),
 		bus:     bus,
+		logger:  logger,
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -117,7 +122,7 @@ func (r *Room[S]) loop() {
 func (r *Room[S]) safe(what string, fn func()) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("room %s: panic in %s: %v", r.id, what, rec)
+			r.logger.Error("room: panic in hook", "room", r.id, "hook", what, "panic", rec)
 		}
 	}()
 	fn()
@@ -389,7 +394,7 @@ func (r *Room[S]) HandleMessage(ctx context.Context, clientID uint64, op uint16,
 		}
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("room %s: panic in message handler (op %d): %v", r.id, op, rec)
+				r.logger.Error("room: panic in message handler", "room", r.id, "op", op, "panic", rec)
 				resp = nil
 				err = protocol.NewError(500, "internal error")
 			}

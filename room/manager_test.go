@@ -10,7 +10,7 @@ import (
 )
 
 func newTestManager() *Manager {
-	return NewManager(eventbus.New())
+	return NewManager(eventbus.New(nil), nil)
 }
 
 func TestJoinUnknownRoom(t *testing.T) {
@@ -48,8 +48,8 @@ func TestSingletonReject(t *testing.T) {
 }
 
 func TestSingletonReplace(t *testing.T) {
-	bus := eventbus.New()
-	m := NewManager(bus)
+	bus := eventbus.New(nil)
+	m := NewManager(bus, nil)
 	r1 := m.Create(RoomConfig{Name: "a", Type: "duel", SingletonMode: protocol.SingletonReplace})
 	r2 := m.Create(RoomConfig{Name: "b", Type: "duel", SingletonMode: protocol.SingletonReplace})
 	defer m.Remove(r2.ID())
@@ -187,8 +187,8 @@ func TestRemoveCleansUpSingletonRecords(t *testing.T) {
 }
 
 func TestLobbyEvents(t *testing.T) {
-	bus := eventbus.New()
-	m := NewManager(bus)
+	bus := eventbus.New(nil)
+	m := NewManager(bus, nil)
 
 	sub := &captureSub{id: 1}
 	bus.Subscribe("lobby", sub)

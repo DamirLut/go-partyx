@@ -48,9 +48,9 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 func newTestRoom(config RoomConfig) (*Room[EmptyState], *eventbus.EventBus) {
-	bus := eventbus.New()
+	bus := eventbus.New(nil)
 	config.ApplyDefaults()
-	return newRoom(config, plainModule, bus), bus
+	return newRoom(config, plainModule, bus, nil), bus
 }
 
 func TestJoinAndLeave(t *testing.T) {
@@ -264,7 +264,7 @@ func TestPanickingHandlerKeepsRoomAlive(t *testing.T) {
 	mod.HandleRaw(100, func(ctx context.Context, r *Room[EmptyState], p *Player, payload []byte) (protocol.Marshaler, error) {
 		panic("boom")
 	})
-	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New())
+	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New(nil), nil)
 	defer r.Shutdown()
 
 	if err := r.Join(1, "alice"); err != nil {
@@ -290,7 +290,7 @@ func TestHandleMessageRequiresMembership(t *testing.T) {
 	mod.HandleRaw(100, func(ctx context.Context, r *Room[EmptyState], p *Player, payload []byte) (protocol.Marshaler, error) {
 		return nil, nil
 	})
-	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New())
+	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New(nil), nil)
 	defer r.Shutdown()
 
 	if _, err := r.HandleMessage(context.Background(), 1, 100, nil); !errors.Is(err, ErrNotInRoom) {
@@ -347,7 +347,7 @@ func TestHooksUseActorInternalAccessors(t *testing.T) {
 		return nil, nil
 	})
 
-	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New())
+	r := newRoom(RoomConfig{Name: "arena", Type: "test"}, mod, eventbus.New(nil), nil)
 	defer r.Shutdown()
 
 	joinDone := make(chan struct{})

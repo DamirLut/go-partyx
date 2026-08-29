@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -25,15 +26,21 @@ type Manager struct {
 	bus          *eventbus.EventBus
 	modules      map[string]AnyModule
 	opTypes      map[uint16]string // opcode -> room type
+	logger       *slog.Logger
 }
 
-func NewManager(bus *eventbus.EventBus) *Manager {
+// NewManager builds a Manager. A nil logger falls back to slog.Default().
+func NewManager(bus *eventbus.EventBus, logger *slog.Logger) *Manager {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Manager{
 		rooms:        make(map[string]AnyRoom),
 		userSessions: make(map[string]map[string]*sessionInfo),
 		bus:          bus,
 		modules:      make(map[string]AnyModule),
 		opTypes:      make(map[uint16]string),
+		logger:       logger,
 	}
 }
 
@@ -87,10 +94,10 @@ func (m *Manager) Create(config RoomConfig) AnyRoom {
 			base.MaxPlayers = config.MaxPlayers
 		}
 		base.ApplyDefaults()
-		r = mod.Create(base, m.bus)
+		r = mod.Create(base, m.bus, m.logger)
 	} else {
 		config.ApplyDefaults()
-		r = newRoom(config, plainModule, m.bus)
+		r = newRoom(config, plainModule, m.bus, m.logger)
 	}
 	r.setOnEmpty(func(id string) { m.Remove(id) })
 

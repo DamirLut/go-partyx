@@ -1,18 +1,20 @@
 package eventbus
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 )
 
 type Topic struct {
 	mu          sync.RWMutex
 	subscribers map[uint64]Subscriber
+	logger      *slog.Logger
 }
 
-func newTopic() *Topic {
+func newTopic(logger *slog.Logger) *Topic {
 	return &Topic{
 		subscribers: make(map[uint64]Subscriber),
+		logger:      logger,
 	}
 }
 
@@ -54,7 +56,7 @@ func (t *Topic) send(topic string, event Event) {
 func (t *Topic) deliver(topic string, event Event, sub Subscriber) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("eventbus: subscriber %d panicked on topic %q: %v", sub.ID(), topic, r)
+			t.logger.Error("eventbus: subscriber panicked", "subscriber", sub.ID(), "topic", topic, "panic", r)
 		}
 	}()
 	sub.Send(topic, event)

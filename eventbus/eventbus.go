@@ -1,17 +1,25 @@
 package eventbus
 
-import "sync"
+import (
+	"log/slog"
+	"sync"
+)
 
 type EventBus struct {
 	topics sync.Map
+	logger *slog.Logger
 }
 
-func New() *EventBus {
-	return &EventBus{}
+// New builds an EventBus. A nil logger falls back to slog.Default().
+func New(logger *slog.Logger) *EventBus {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &EventBus{logger: logger}
 }
 
 func (b *EventBus) getTopic(name string) *Topic {
-	v, _ := b.topics.LoadOrStore(name, newTopic())
+	v, _ := b.topics.LoadOrStore(name, newTopic(b.logger))
 	return v.(*Topic)
 }
 
