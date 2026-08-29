@@ -14,7 +14,6 @@ import (
 	"github.com/damirlut/go-partyx/session"
 )
 
-// Config wires a Gateway. Built once by partyx.New in typical apps.
 type Config struct {
 	Addr          string
 	Bus           *eventbus.EventBus
@@ -22,12 +21,12 @@ type Config struct {
 	Sessions      *session.Store
 	Authenticator Authenticator
 	Rooms         *room.Manager
-	// CheckOrigin controls the WebSocket origin check. nil means the safe
-	// gorilla/websocket default (same-origin). Only allow all origins in dev.
+	// nil means the gorilla/websocket same-origin default. Allow all origins
+	// only in dev.
 	CheckOrigin func(r *http.Request) bool
 }
 
-// Gateway is the transport layer: HTTP + WebSocket, auth, dispatching, and
+// Gateway is the transport layer: HTTP + WebSocket, auth, dispatching and
 // the connection lifecycle.
 type Gateway struct {
 	config     Config

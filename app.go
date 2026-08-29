@@ -21,23 +21,18 @@ import (
 	"github.com/damirlut/go-partyx/session"
 )
 
-// Config configures an App.
 type Config struct {
-	// Addr is the HTTP listen address. Default ":8080".
+	// Default ":8080".
 	Addr string
-	// Authenticator validates the token sent as the first client message.
 	// nil falls back to DevAuth() with a warning — never ship that.
 	Authenticator Authenticator
-	// CheckOrigin controls the WebSocket origin check. nil means the safe
-	// same-origin default; allow all origins only in dev.
+	// nil means the safe same-origin default; allow all origins only in dev.
 	CheckOrigin func(r *http.Request) bool
-	// DisableDefaultHandlers turns off the built-in room.*/lobby.* methods
-	// (room.create, room.join, room.leave, lobby.list).
+	// Turns off the built-in room.*/lobby.* methods.
 	DisableDefaultHandlers bool
 }
 
-// App is the framework facade: it owns the gateway and all subsystems.
-// Subsystems are exposed via accessors for advanced wiring.
+// App is the framework facade owning the gateway and all subsystems.
 type App struct {
 	bus      *eventbus.EventBus
 	sessions *session.Store
@@ -90,33 +85,27 @@ func New(cfg Config) *App {
 	}
 }
 
-// Bus is the shared event bus (publish/subscribe to arbitrary topics).
 func (a *App) Bus() *eventbus.EventBus {
 	return a.bus
 }
 
-// Sessions is the session store of authenticated clients.
 func (a *App) Sessions() *session.Store {
 	return a.sessions
 }
 
-// Rooms is the room manager (create/find/list rooms, singleton enforcement).
 func (a *App) Rooms() *room.Manager {
 	return a.rooms
 }
 
-// Lobby lists live rooms.
 func (a *App) Lobby() *lobby.Lobby {
 	return a.lobby
 }
 
-// Commands is the global RPC registry (opcode -> handler).
 func (a *App) Commands() *command.Registry {
 	return a.commands
 }
 
-// Engine exposes the underlying gin engine for custom HTTP routes and
-// middleware.
+// Engine exposes the gin engine for custom HTTP routes and middleware.
 func (a *App) Engine() *gin.Engine {
 	return a.gateway.Engine()
 }
@@ -131,12 +120,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 // RegisterRoomType registers a room module: rooms created with
-// CreateRoomRequest.Type == module.Type get the module's game state, hooks,
-// game loop and message handlers. It panics on a duplicate type, or when one
-// of the module's opcodes is already registered globally.
-//
-// This is the low-level path; most code should define room types with the
-// fluent Room[S] builder instead (its Register calls this function).
+// CreateRoomRequest.Type == module.Type get the module's state, hooks, game
+// loop and handlers. Panics on a duplicate type or a global opcode conflict.
+// Most code should define room types with the fluent Room[S] builder instead.
 func RegisterRoomType[S any](app *App, m *room.Module[S]) {
 	for _, op := range m.Ops() {
 		if app.commands.Has(op) {

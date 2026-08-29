@@ -36,9 +36,8 @@ func NewManager(bus *eventbus.EventBus) *Manager {
 	}
 }
 
-// RegisterModule registers a room type. It panics on a duplicate type or
-// opcode: registration happens at startup and a collision is a programming
-// error best caught immediately.
+// RegisterModule registers a room type. Panics on a duplicate type or
+// opcode: a collision is a programming error best caught at startup.
 func (m *Manager) RegisterModule(mod AnyModule) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -58,8 +57,7 @@ func (m *Manager) RegisterModule(mod AnyModule) {
 	m.modules[t] = mod
 }
 
-// OpType reports the room type whose module handles op, used for room-scoped
-// message routing.
+// OpType reports the room type whose module handles op (room-scoped routing).
 func (m *Manager) OpType(op uint16) (string, bool) {
 	m.mu.RLock()
 	t, ok := m.opTypes[op]
@@ -67,13 +65,11 @@ func (m *Manager) OpType(op uint16) (string, bool) {
 	return t, ok
 }
 
-// Create builds a room and wires its lifecycle: the room is auto-removed
-// when its last player leaves, and a room.created event is published to the
-// lobby topic.
-//
-// If config.Type matches a registered module, the module provides the game
-// state and default config (the request may only override Name and
-// MaxPlayers); otherwise a plain stateless room is created.
+// Create builds a room, wires auto-removal when its last player leaves, and
+// publishes room.created to the lobby topic. If config.Type matches a
+// registered module, the module provides the game state and default config
+// (the request may only override Name and MaxPlayers); otherwise a plain
+// stateless room is created.
 func (m *Manager) Create(config RoomConfig) AnyRoom {
 	m.mu.RLock()
 	mod := m.modules[config.Type]
@@ -184,8 +180,8 @@ func (m *Manager) JoinRoom(userID string, clientID uint64, roomID string) (proto
 
 	var joinErr error
 	if replaced != nil && replaced.RoomID == roomID {
-		// Same room: atomic swap, so the room never becomes transiently
-		// empty and is not auto-removed under our feet.
+		// Same room: atomic swap, so it never becomes transiently empty
+		// and is not auto-removed under our feet.
 		joinErr = r.JoinReplace(replaced.ClientID, clientID, userID)
 		if joinErr == nil {
 			m.bus.Publish(clientTopic(replaced.ClientID),

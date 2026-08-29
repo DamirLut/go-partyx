@@ -19,8 +19,8 @@ func (s *Store) Set(session *Session) {
 	s.mu.Unlock()
 }
 
-// Get returns a session by ID. Intended for business logic (e.g. looking up
-// another player's session) and DX, even if the gateway itself does not use it.
+// Get looks up a session by ID, e.g. from business logic; the gateway
+// itself does not use it.
 func (s *Store) Get(id string) (*Session, bool) {
 	s.mu.RLock()
 	sess, ok := s.sessions[id]

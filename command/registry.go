@@ -5,8 +5,8 @@ import (
 	"sync"
 )
 
-// Registry maps method opcodes to handlers. Handlers are registered at
-// startup; Register is safe to call concurrently with Get.
+// Registry maps method opcodes to handlers; Register is safe to call
+// concurrently with Get.
 type Registry struct {
 	mu       sync.RWMutex
 	handlers map[uint16]Handler
@@ -18,9 +18,8 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register associates op with handler. It panics on a duplicate opcode:
-// registration happens at startup and a collision is a programming error
-// best caught immediately.
+// Register panics on a duplicate opcode: a collision is a programming error
+// best caught at startup.
 func (r *Registry) Register(op uint16, handler Handler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

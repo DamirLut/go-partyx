@@ -6,8 +6,6 @@ import (
 	"github.com/damirlut/go-partyx/room"
 )
 
-// RegisterRoomHandlers registers the built-in room methods:
-// MethodRoomCreate, MethodRoomJoin and MethodRoomLeave.
 func RegisterRoomHandlers(registry *command.Registry, mgr *room.Manager) {
 	registry.Register(uint16(protocol.MethodRoomCreate), createRoomHandler(mgr))
 	registry.Register(uint16(protocol.MethodRoomJoin), joinRoomHandler(mgr))

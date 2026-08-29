@@ -20,9 +20,8 @@ type Room[S any] struct {
 	config RoomConfig
 	module *Module[S]
 
-	// State is the game state owned by this room. It must only be touched
-	// from module hooks, message handlers and OnTick — those run inside the
-	// actor. Accessing it from anywhere else is a data race.
+	// State must only be touched from module hooks, message handlers and
+	// OnTick — they run inside the actor. Anywhere else is a data race.
 	State *S
 
 	players map[uint64]*Player
@@ -58,8 +57,7 @@ func newRoom[S any](config RoomConfig, module *Module[S], bus *eventbus.EventBus
 		cancel:  cancel,
 	}
 	r.wg.Add(1)
-	// OnInit runs synchronously before the actor starts: the room is not
-	// shared with anyone yet, so this is race-free and deterministic.
+	// OnInit runs before the actor starts, so the room is not shared yet.
 	if module.onInit != nil {
 		r.safe("OnInit", func() { module.onInit(r) })
 	}
@@ -118,13 +116,12 @@ func (r *Room[S]) safe(what string, fn func()) {
 }
 
 // do runs fn inside the actor and waits for it to finish. It reports whether
-// fn actually ran: after Shutdown pending and subsequent operations are
-// skipped and do returns false, so callers (e.g. Join) can fail instead of
-// silently succeeding on a dead room.
+// fn ran: after Shutdown operations are skipped and do returns false, so
+// callers fail instead of silently succeeding on a dead room.
 func (r *Room[S]) do(fn func(*Room[S])) bool {
 	done := make(chan struct{}, 1)
-	// done is signaled via defer so a panicking fn (recovered by safe in the
-	// loop) still releases the caller.
+	// Deferred signal: a panicking fn (recovered in the loop) still
+	// releases the caller.
 	wrapped := func(r *Room[S]) {
 		defer func() { done <- struct{}{} }()
 		fn(r)
@@ -186,10 +183,9 @@ func (r *Room[S]) Join(clientID uint64, userID string) error {
 	return nil
 }
 
-// JoinReplace atomically swaps oldClientID for clientID as a single
-// serialized operation: the old player is removed and the new one added
-// without the room ever becoming transiently empty (which would trigger
-// auto-removal via onEmpty).
+// JoinReplace atomically swaps oldClientID for clientID in one serialized
+// step, so the room never becomes transiently empty (which would trigger
+// auto-removal).
 func (r *Room[S]) JoinReplace(oldClientID, clientID uint64, userID string) error {
 	var joinErr error
 	var becameEmpty bool
@@ -323,7 +319,6 @@ func (r *Room[S]) BroadcastBytes(op uint16, payload []byte) {
 	r.bus.Publish(r.topic(), eventbus.NewEventBytes(op, payload))
 }
 
-// HandlesOp reports whether the room's module has a handler for op.
 func (r *Room[S]) HandlesOp(op uint16) bool {
 	_, ok := r.module.handlers[op]
 	return ok

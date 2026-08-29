@@ -130,8 +130,8 @@ func (c *Client) Unsubscribe(topic string) {
 	c.bus.Unsubscribe(topic, c)
 }
 
-// RoomIDs returns the IDs of the rooms the client is subscribed to; used to
-// route room-scoped messages.
+// RoomIDs returns the IDs of the rooms the client is subscribed to; used for
+// room-scoped message routing.
 func (c *Client) RoomIDs() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -249,9 +249,8 @@ func (c *Client) ReadLoop(dispatcher *Dispatcher) {
 	}
 }
 
-// Close is idempotent: it signals WriteLoop (via done) to flush pending
-// messages and close the connection. The connection itself is closed by
-// WriteLoop, so queued messages are not lost.
+// Close is idempotent: it signals WriteLoop to flush pending messages and
+// close the connection, so queued messages are not lost.
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		close(c.done)

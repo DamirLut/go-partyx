@@ -8,9 +8,8 @@ import (
 	"github.com/damirlut/go-partyx/session"
 )
 
-// DevAuth returns an Authenticator for development: the token is used
-// directly as the user ID and every connection gets a fresh session.
-// Replace with a real implementation (JWT, OAuth, ...) in production.
+// DevAuth is a development Authenticator: the token is the user ID, every
+// connection gets a fresh session. Not for production.
 func DevAuth() Authenticator {
 	return devAuth{}
 }
