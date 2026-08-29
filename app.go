@@ -9,6 +9,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -41,6 +42,15 @@ type Config struct {
 	// nil falls back to slog.Default(). All library logging — hook panics,
 	// slow-consumer disconnects, the DevAuth warning — goes through it.
 	Logger *slog.Logger
+
+	// Connection tuning. Zero values apply the defaults noted below.
+	MaxMessageSize  int           // default 64 KiB
+	AuthTimeout     time.Duration // default 10s
+	PongWait        time.Duration // default 60s
+	WriteWait       time.Duration // default 10s
+	PingPeriod      time.Duration // default 30s, must stay below PongWait
+	SendBufferSize  int           // default 256
+	ShutdownTimeout time.Duration // default 5s
 }
 
 // App is the framework facade owning the gateway and all subsystems.
@@ -83,16 +93,23 @@ func New(cfg Config) *App {
 	}
 
 	gw := gateway.New(gateway.Config{
-		Engine:        cfg.Engine,
-		WSPath:        cfg.WSPath,
-		Addr:          addr,
-		Bus:           bus,
-		Commands:      commands,
-		Sessions:      sessions,
-		Authenticator: auth,
-		Rooms:         rooms,
-		CheckOrigin:   cfg.CheckOrigin,
-		Logger:        logger,
+		Engine:          cfg.Engine,
+		WSPath:          cfg.WSPath,
+		Addr:            addr,
+		Bus:             bus,
+		Commands:        commands,
+		Sessions:        sessions,
+		Authenticator:   auth,
+		Rooms:           rooms,
+		CheckOrigin:     cfg.CheckOrigin,
+		Logger:          logger,
+		MaxMessageSize:  cfg.MaxMessageSize,
+		AuthTimeout:     cfg.AuthTimeout,
+		PongWait:        cfg.PongWait,
+		WriteWait:       cfg.WriteWait,
+		PingPeriod:      cfg.PingPeriod,
+		SendBufferSize:  cfg.SendBufferSize,
+		ShutdownTimeout: cfg.ShutdownTimeout,
 	})
 
 	return &App{

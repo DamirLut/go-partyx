@@ -17,13 +17,14 @@ import (
 )
 
 const (
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = 30 * time.Second // must be less than pongWait
-	authTimeout    = 10 * time.Second
-	maxMessageSize = 64 * 1024
-	sendBufferSize = 256
-	flushWait      = 2 * time.Second // budget for draining pending messages on close
+	defaultWriteWait       = 10 * time.Second
+	defaultPongWait        = 60 * time.Second
+	defaultPingPeriod      = 30 * time.Second // must stay below pongWait
+	defaultAuthTimeout     = 10 * time.Second
+	defaultMaxMessageSize  = 64 * 1024
+	defaultSendBufferSize  = 256
+	defaultShutdownTimeout = 5 * time.Second
+	flushWait              = 2 * time.Second // budget for draining pending messages on close
 	// Backpressure: when this many messages await the handler goroutine, the
 	// read loop stalls — the connection then dies on its read deadline
 	// instead of growing the queue without bound.
@@ -43,6 +44,7 @@ type Client struct {
 	topics  map[string]struct{}
 	roomIDs map[string]struct{}
 	bus     *eventbus.EventBus
+	tuning  tuning
 	logger  *slog.Logger
 
 	// ctx lives for the connection; canceled by Close. Request handlers get
@@ -58,17 +60,21 @@ type Client struct {
 	closeOnce sync.Once
 }
 
-func NewClient(conn *websocket.Conn, bus *eventbus.EventBus) *Client {
+// NewClient starts a connection. Missing tuning fields fall back to the
+// package defaults.
+func NewClient(conn *websocket.Conn, bus *eventbus.EventBus, t tuning) *Client {
+	t = t.withDefaults()
 	id := nextClientID.Add(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		id:      id,
 		conn:    conn,
-		send:    make(chan []byte, sendBufferSize),
+		send:    make(chan []byte, t.sendBufferSize),
 		handles: make(chan *protocol.ClientMessage, handleBufferSize),
 		topics:  make(map[string]struct{}),
 		roomIDs: make(map[string]struct{}),
 		bus:     bus,
+		tuning:  t,
 		logger:  slog.Default(),
 		ctx:     ctx,
 		cancel:  cancel,
@@ -171,7 +177,7 @@ func (c *Client) SetSession(sess *session.Session) {
 	c.authenticated = true
 	c.mu.Unlock()
 	// Auth deadline is no longer relevant; switch to pong-based liveness.
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetReadDeadline(time.Now().Add(c.tuning.pongWait))
 }
 
 func (c *Client) Session() *session.Session {
@@ -188,7 +194,7 @@ func (c *Client) IsAuthenticated() bool {
 
 // WriteLoop is the only writer to the websocket connection.
 func (c *Client) WriteLoop() {
-	ticker := time.NewTicker(pingPeriod)
+	ticker := time.NewTicker(c.tuning.pingPeriod)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
@@ -197,12 +203,12 @@ func (c *Client) WriteLoop() {
 	for {
 		select {
 		case data := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			c.conn.SetWriteDeadline(time.Now().Add(c.tuning.writeWait))
 			if err := c.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 				return
 			}
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			c.conn.SetWriteDeadline(time.Now().Add(c.tuning.writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -230,10 +236,10 @@ func (c *Client) ReadLoop(dispatcher *Dispatcher) {
 		dispatcher.OnDisconnect(c)
 	}()
 
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(authTimeout))
+	c.conn.SetReadLimit(c.tuning.maxMessageSize)
+	c.conn.SetReadDeadline(time.Now().Add(c.tuning.authTimeout))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		c.conn.SetReadDeadline(time.Now().Add(c.tuning.pongWait))
 		return nil
 	})
 
@@ -248,9 +254,9 @@ func (c *Client) ReadLoop(dispatcher *Dispatcher) {
 
 		// Any readable frame proves liveness. Without this refresh, a
 		// handler still busy on a previous message could outlive pongWait.
-		wait := authTimeout
+		wait := c.tuning.authTimeout
 		if c.IsAuthenticated() {
-			wait = pongWait
+			wait = c.tuning.pongWait
 		}
 		c.conn.SetReadDeadline(time.Now().Add(wait))
 

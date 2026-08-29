@@ -19,6 +19,7 @@ type Dispatcher struct {
 	sessions      *session.Store
 	authenticator Authenticator
 	rooms         *room.Manager
+	tuning        tuning
 }
 
 func NewDispatcher(
@@ -27,6 +28,7 @@ func NewDispatcher(
 	sessions *session.Store,
 	authenticator Authenticator,
 	rooms *room.Manager,
+	t tuning,
 ) *Dispatcher {
 	return &Dispatcher{
 		commands:      commands,
@@ -34,6 +36,7 @@ func NewDispatcher(
 		sessions:      sessions,
 		authenticator: authenticator,
 		rooms:         rooms,
+		tuning:        t,
 	}
 }
 
@@ -60,7 +63,7 @@ func (d *Dispatcher) handleAuth(c *Client, msg *protocol.ClientMessage) {
 
 	// Token verification (often an external call) is bounded by the auth
 	// timeout and canceled if the connection dies meanwhile.
-	authCtx, cancel := context.WithTimeout(c.Context(), authTimeout)
+	authCtx, cancel := context.WithTimeout(c.Context(), d.tuning.authTimeout)
 	defer cancel()
 	sess, err := d.authenticator.Authenticate(authCtx, msg.Token)
 	if err != nil {
