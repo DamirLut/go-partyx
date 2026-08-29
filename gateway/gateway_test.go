@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -406,4 +407,52 @@ func TestSubscribeReceivesLobbyEvents(t *testing.T) {
 	if info := decodePayload[protocol.RoomInfo](t, ev); info.ID != created.ID {
 		t.Fatalf("room.created id = %q, want %q", info.ID, created.ID)
 	}
+}
+
+// TestCustomWSPathAndMiddleware: the consumer owns the engine, so WSPath
+// moves the endpoint and middleware on the engine wraps the upgrade too.
+func TestCustomWSPathAndMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	bus := eventbus.New()
+	rooms := room.NewManager(bus)
+	commands := command.NewRegistry()
+	handlers.RegisterRoomHandlers(commands, rooms)
+	handlers.RegisterLobbyHandlers(commands, lobby.New(rooms))
+
+	var mwRan atomic.Bool
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) {
+		mwRan.Store(true)
+		c.Next()
+	})
+
+	New(Config{
+		Engine:        engine,
+		WSPath:        "/api/v1/ws",
+		Bus:           bus,
+		Commands:      commands,
+		Sessions:      session.NewStore(),
+		Authenticator: testAuth{},
+		Rooms:         rooms,
+	})
+
+	srv := httptest.NewServer(engine)
+	t.Cleanup(srv.Close)
+
+	// The default path must not be registered when WSPath is set.
+	if _, _, err := websocket.DefaultDialer.Dial(wsURL(srv, "/ws"), nil); err == nil {
+		t.Fatal("dial to default /ws should fail when WSPath is set")
+	}
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv, "/api/v1/ws"), nil)
+	if err != nil {
+		t.Fatalf("dial custom path: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	if !mwRan.Load() {
+		t.Fatal("engine middleware did not run for the ws route")
+	}
+	auth(t, conn, "alice")
 }
