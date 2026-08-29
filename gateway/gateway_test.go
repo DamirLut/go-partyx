@@ -45,7 +45,9 @@ func newTestServer(t *testing.T, setup func(rooms *room.Manager, commands *comma
 		setup(rooms, commands)
 	}
 
-	gw := New(Config{
+	engine := gin.New()
+	New(Config{
+		Engine:        engine,
 		Addr:          "127.0.0.1:0",
 		Bus:           bus,
 		Commands:      commands,
@@ -54,15 +56,18 @@ func newTestServer(t *testing.T, setup func(rooms *room.Manager, commands *comma
 		Rooms:         rooms,
 	})
 
-	srv := httptest.NewServer(gw.Engine())
+	srv := httptest.NewServer(engine)
 	t.Cleanup(srv.Close)
 	return srv
 }
 
+func wsURL(srv *httptest.Server, path string) string {
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + path
+}
+
 func dialWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
 	t.Helper()
-	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv, "/ws"), nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

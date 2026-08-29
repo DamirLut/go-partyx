@@ -15,6 +15,13 @@ import (
 )
 
 type Config struct {
+	// The consumer-owned gin engine. The gateway mounts its WebSocket route
+	// on it; middleware and custom HTTP routes are attached to the engine
+	// before New. Required.
+	Engine *gin.Engine
+	// WebSocket endpoint path. Empty means "/ws".
+	WSPath string
+
 	Addr          string
 	Bus           *eventbus.EventBus
 	Commands      *command.Registry
@@ -30,15 +37,19 @@ type Config struct {
 // the connection lifecycle.
 type Gateway struct {
 	config     Config
-	engine     *gin.Engine
 	dispatcher *Dispatcher
 	upgrader   websocket.Upgrader
 }
 
 func New(config Config) *Gateway {
+	if config.Engine == nil {
+		panic("partyx/gateway: Config.Engine is required — the consumer owns the gin engine")
+	}
+	if config.WSPath == "" {
+		config.WSPath = "/ws"
+	}
 	g := &Gateway{
 		config: config,
-		engine: gin.Default(),
 		dispatcher: NewDispatcher(
 			config.Commands,
 			config.Bus,
@@ -57,7 +68,7 @@ func New(config Config) *Gateway {
 }
 
 func (g *Gateway) setupRoutes() {
-	g.engine.GET("/ws", g.handleWebSocket)
+	g.config.Engine.GET(g.config.WSPath, g.handleWebSocket)
 }
 
 func (g *Gateway) handleWebSocket(c *gin.Context) {
@@ -74,7 +85,7 @@ func (g *Gateway) handleWebSocket(c *gin.Context) {
 func (g *Gateway) Run(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:    g.config.Addr,
-		Handler: g.engine,
+		Handler: g.config.Engine,
 	}
 
 	errCh := make(chan error, 1)
@@ -90,9 +101,4 @@ func (g *Gateway) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
-}
-
-// Engine exposes the gin engine for custom HTTP routes and middleware.
-func (g *Gateway) Engine() *gin.Engine {
-	return g.engine
 }

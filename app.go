@@ -22,12 +22,19 @@ import (
 )
 
 type Config struct {
+	// The gin engine the framework mounts its WebSocket route on. The
+	// consumer owns routing: middleware and custom HTTP routes are attached
+	// to the engine before New — middleware registered there also wraps the
+	// WS route. Required.
+	Engine *gin.Engine
 	// Default ":8080".
 	Addr string
 	// nil falls back to DevAuth() with a warning — never ship that.
 	Authenticator Authenticator
 	// nil means the safe same-origin default; allow all origins only in dev.
 	CheckOrigin func(r *http.Request) bool
+	// WebSocket endpoint path. Empty means "/ws".
+	WSPath string
 	// Turns off the built-in room.*/lobby.* methods.
 	DisableDefaultHandlers bool
 }
@@ -40,6 +47,7 @@ type App struct {
 	lobby    *lobby.Lobby
 	commands *command.Registry
 	gateway  *gateway.Gateway
+	engine   *gin.Engine
 }
 
 func New(cfg Config) *App {
@@ -66,6 +74,8 @@ func New(cfg Config) *App {
 	}
 
 	gw := gateway.New(gateway.Config{
+		Engine:        cfg.Engine,
+		WSPath:        cfg.WSPath,
 		Addr:          addr,
 		Bus:           bus,
 		Commands:      commands,
@@ -82,6 +92,7 @@ func New(cfg Config) *App {
 		lobby:    l,
 		commands: commands,
 		gateway:  gw,
+		engine:   cfg.Engine,
 	}
 }
 
@@ -105,9 +116,10 @@ func (a *App) Commands() *command.Registry {
 	return a.commands
 }
 
-// Engine exposes the gin engine for custom HTTP routes and middleware.
+// Engine returns the gin engine passed to New — custom HTTP routes and
+// middleware live there.
 func (a *App) Engine() *gin.Engine {
-	return a.gateway.Engine()
+	return a.engine
 }
 
 // Run serves until ctx is canceled, then shuts down gracefully:
