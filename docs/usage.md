@@ -37,6 +37,14 @@ Config:
 | `Authenticator` | `DevAuth()` + a log warning | Token validation |
 | `CheckOrigin` | `nil` (same-origin, safe) | WebSocket Origin check |
 | `DisableDefaultHandlers` | `false` | Turn off built-in methods |
+| `Logger` | `slog.Default()` | Where all library logging goes (hook panics, slow-consumer disconnects) |
+| `MaxMessageSize` | 64 KiB | Max size of one WS frame |
+| `AuthTimeout` | 10s | Deadline for the first (`auth`) message |
+| `PongWait` | 60s | Read deadline refreshed by pong/data frames |
+| `WriteWait` | 10s | Per-write deadline |
+| `PingPeriod` | 30s | Server ping period (must stay below `PongWait`) |
+| `SendBufferSize` | 256 | Per-connection outbound queue; overflow disconnects the slow client |
+| `ShutdownTimeout` | 5s | Budget for the graceful teardown started by canceling `Run`'s context |
 
 You own the gin engine, so plain gin idioms work for the HTTP side:
 
@@ -138,9 +146,13 @@ Implement the interface:
 
 ```go
 type Authenticator interface {
-	Authenticate(token string) (*session.Session, error)
+	Authenticate(ctx context.Context, token string) (*session.Session, error)
 }
 ```
+
+`ctx` is bounded by `AuthTimeout` and canceled when the connection closes —
+a token check against an external platform is cancelable like any other
+outgoing call.
 
 The client sends `auth` with a token as its first message; on failure it
 gets 401 and the connection is closed — the same happens on timeout (10 s).
@@ -181,6 +193,7 @@ else becomes 500.
 
 | Field | What it is |
 |-------|------------|
+| `ctx.Context` (embedded) | The request `context.Context` — canceled when the connection closes or the server shuts down |
 | `ctx.Session` | The client session (`UserID`, `Metadata`) |
 | `ctx.ClientID` | Connection ID (the player in rooms) |
 | `ctx.Bus` | EventBus — publish events |
@@ -191,9 +204,11 @@ Escape hatch for raw bytes — `app.HandleRaw(op, fn)`. An opcode may
 have exactly one owner: a duplicate (global or from a room module) panics at
 startup.
 
-The handler runs on the client connection's read loop — do not do long
-blocking work there; room-bound game logic belongs in a room module
-(section 4), where it runs inside the actor.
+Handlers run on a per-connection worker outside the read loop, one message
+at a time in arrival order: a slow handler (DB, external RPC) delays that
+client's subsequent responses but does not stall frame reads or the
+connection liveness deadlines. Use the embedded `context.Context` to bound
+long work.
 
 ## 4. Game Room Modules
 
@@ -214,15 +229,15 @@ partyx.Room[WordState]("wordgame"). // CreateRoomRequest.Type -> this type
 	}).
 	MaxPlayers(2).
 	Singleton(protocol.SingletonReject).
-	OnJoin(func(r *room.Room[WordState], p *room.Player) {
+	OnJoin(func(ctx context.Context, r *room.Room[WordState], p *room.Player) {
 		r.State.Words[p.ID] = ""
 	}).
-	OnLeave(func(r *room.Room[WordState], p *room.Player) {
+	OnLeave(func(ctx context.Context, r *room.Room[WordState], p *room.Player) {
 		delete(r.State.Words, p.ID)
 	}).
 	// Typed room message handler — runs inside the actor.
-	HandleTyped(uint16(messages.GameOpGuess),
-		func(r *room.Room[WordState], p *room.Player, req *messages.GuessRequest) (*messages.GuessResponse, error) {
+	Handle(uint16(messages.GameOpGuess),
+		func(ctx context.Context, r *room.Room[WordState], p *room.Player, req *messages.GuessRequest) (*messages.GuessResponse, error) {
 			correct := req.Word == "party"
 			if correct {
 				r.State.Round++
@@ -238,7 +253,7 @@ Two notes on the syntax:
 
 - the state type is named explicitly — `partyx.Room[WordState]("wordgame")`:
   Go cannot infer it from the subsequent `.State(...)` call;
-- `HandleTyped(op, fn)` is a generic method (Go 1.27): all its type
+- `Handle(op, fn)` is a generic method (Go 1.27): all its type
   parameters are inferred from `fn`, and the framework decodes the payload,
   calls `Validate()` when implemented, and encodes the response (a `nil`
   response → an empty payload).
@@ -257,16 +272,26 @@ Builder methods (all optional except `Register`):
 | `OnInit(fn)` | Synchronously when the room is created (before publishing — deterministic) |
 | `OnJoin(fn)` | After a player is added (in the same serialized step) |
 | `OnLeave(fn)` | After a player is removed |
-| `OnClose(fn)` | When the room is removed |
+| `OnClose(fn)` | When the room shuts down — including server shutdown |
 | `Tick(rate, fn)` | Game loop: `fn` every `rate` inside the actor (timers, physics, rounds) |
-| `HandleTyped(op, fn)` | Typed message handler (decoded/validated/encoded by the framework); panics on a duplicate opcode |
-| `Handle(op, h)` | Raw message handler (bytes in, Marshaler out); panics on a duplicate opcode |
+| `Handle(op, fn)` | Typed message handler (decoded/validated/encoded by the framework); panics on a duplicate opcode |
+| `HandleRaw(op, h)` | Raw message handler (bytes in, Marshaler out); panics on a duplicate opcode |
 | `Register(app)` | Registers the type; panics on a duplicate type or an opcode conflict with a global method |
 
-Available inside: `r.State` (your state), `r.Players()`,
-`r.Broadcast(op, msg)` / `r.BroadcastBytes`, `r.ID()`, `r.Config()`,
-`r.Close()`/`r.Open()`. A panic in a hook/handler is logged and does not
-take down the actor.
+All hooks and handlers receive a `context.Context` as the first argument.
+Hooks get the room's lifetime context: it is canceled when the room shuts
+down, so `OnClose` always observes it in the done state. Message handlers
+get the request context, canceled when the connection closes or the server
+shuts down.
+
+Available inside the actor: `r.State` (your state), `r.PlayerList()`,
+`r.HasPlayerID(id)`, `r.RoomInfo()` — direct accessors you may call from
+hooks, handlers and `OnTick`; `r.Broadcast(op, msg)` / `r.BroadcastBytes`
+are safe anywhere. The blocking variants `r.Players()`, `r.HasPlayer()`,
+`r.Info()`, `r.IsOpen()` are for callers **outside** the actor (they submit
+to the inbox and wait) — calling them from a hook or handler deadlocks;
+`r.Close()`/`r.Open()` are blocking too. A panic in a hook/handler is
+logged (to `Config.Logger`) and does not take down the actor.
 
 **Room-scoped message routing.** The client simply sends a request with an
 opcode — no roomID. The framework finds the room: opcode → module type →
@@ -283,7 +308,10 @@ and singleton modes still work.
 
 **Lifecycle:** the last player leaving removes the room automatically
 (`OnClose` → a `room.removed` event in `lobby`). A client disconnect is
-handled by the framework (leave from all rooms).
+handled by the framework (leave from all rooms). When the server shuts down
+(`app.Run(ctx)` context canceled), the framework closes every client
+connection, runs the disconnect cleanup, and shuts down all room actors —
+`OnClose` fires for every room.
 
 ## 5. Events
 
@@ -326,9 +354,9 @@ endpoint (`/ws` by default — `WSPath`), binary `ClientMessage`/`ServerMessage`
 frames. Types:
 `auth` / `subscribe` / `unsubscribe` / `request` from the client;
 `response` / `error` / `event` from the server. Error codes:
-400/401/404/409/410/500. Connection limits: frame ≤ 64 KB, auth timeout
-10 s, ping 30 s / pong 60 s, send buffer 256 messages (overflow =
-disconnecting the slow client), graceful close with a queue flush (2 s).
+400/401/404/409/410/500. Connection limits (frame size, auth/pong timeouts,
+send buffer) are the `Config` fields listed in the beginning — the numbers
+there are the defaults.
 
 Client side: generate bindings from `protocol/schema.go` + your schema
 (`arpack -out-ts ...`) and send binary frames with

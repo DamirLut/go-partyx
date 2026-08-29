@@ -118,7 +118,7 @@ tools/               tools.go pinning the arpack code generator
 | room.Manager | sync.RWMutex | Short CRUD ops, opcode routing table |
 | EventBus.Topic | sync.RWMutex | Publish reads (RLock), sub/unsub writes |
 | SessionStore | sync.RWMutex | get/set/delete |
-| Client | goroutines (readLoop + writeLoop) | Actor-like via channels |
+| Client | goroutines (readLoop + handleLoop + writeLoop) | Actor-like via channels; dispatch is off the read loop |
 
 ## Room Actor and Game Modules
 
@@ -130,12 +130,12 @@ partyx.Room[WordState]("wordgame").
 	State(func() *WordState { return &WordState{Words: map[uint64]string{}} }).
 	MaxPlayers(2).
 	Singleton(protocol.SingletonReject).
-	OnInit(func(r *room.Room[WordState]) { ... }).
-	OnJoin(func(r *room.Room[WordState], p *room.Player) { ... }).
-	OnLeave(func(r *room.Room[WordState], p *room.Player) { ... }).
-	OnClose(func(r *room.Room[WordState]) { ... }).
-	Tick(100*time.Millisecond, func(r *room.Room[WordState], dt time.Duration) { ... }).
-	HandleTyped(op, guessHandler).
+	OnInit(func(ctx context.Context, r *room.Room[WordState]) { ... }).
+	OnJoin(func(ctx context.Context, r *room.Room[WordState], p *room.Player) { ... }).
+	OnLeave(func(ctx context.Context, r *room.Room[WordState], p *room.Player) { ... }).
+	OnClose(func(ctx context.Context, r *room.Room[WordState]) { ... }).
+	Tick(100*time.Millisecond, func(ctx context.Context, r *room.Room[WordState], dt time.Duration) { ... }).
+	Handle(op, guessHandler).
 	Register(app)
 ```
 
@@ -147,13 +147,26 @@ mutated directly with no locks and no user-visible `Do`:
 - `OnJoin`/`OnLeave` run inside the same serialized step as the player
   add/remove;
 - `OnTick` runs in the actor loop every `Tick(rate, fn)` interval;
-- message handlers (`HandleTyped(op, fn)`) are invoked through the actor
+- message handlers (`Handle(op, fn)`) are invoked through the actor
   inbox, and the caller (gateway) blocks until completion.
+
+All of them receive a `context.Context`: hooks get the room's lifetime
+context (canceled at shutdown), message handlers get the request context
+(canceled when the connection closes or the server shuts down).
+
+Inside the actor, state must be read through the direct accessors
+`r.PlayerList()`, `r.HasPlayerID(id)`, `r.RoomInfo()`. The blocking
+variants (`r.Players()`, `r.HasPlayer()`, `r.Info()`, `r.IsOpen()`,
+`r.Join(...)`, `r.Leave(...)`) submit a closure to the inbox and wait —
+calling them from a hook or handler would deadlock, so they are for callers
+outside the actor. `Info()` returns `ErrRoomClosed` once the room is shut
+down instead of a silent zero value.
 
 Typed handlers decode the payload, auto-call `Validate() error` when
 implemented (failure → 400), and encode the response — a typed-nil response
 means an empty payload. Panics in hooks/handlers are recovered and logged
-(`safe`), so one bug cannot kill the actor or the process.
+(via the injected `slog` logger), so one bug cannot kill the actor or the
+process.
 
 ### Room-scoped message routing
 
@@ -176,6 +189,10 @@ unknown type yields a plain stateless room (`EmptyState`), keeping lobby and
 singleton enforcement usable without a module. For module-backed rooms the
 module config wins for `SingletonMode`; `Name`/`MaxPlayers` may be
 overridden by the create request.
+
+Server shutdown runs the same path for every room: `app.Run`'s context
+cancel → gateway teardown → `Manager.ShutdownAll` → `Shutdown` → `OnClose`
+per room (no `room.removed` events at that point — nobody is listening).
 
 ## Room Singleton Enforcement
 
@@ -202,17 +219,22 @@ snapshot; a panicking subscriber is recovered and logged.
 
 ```go
 type Authenticator interface {
-    Authenticate(token string) (*session.Session, error)
+    Authenticate(ctx context.Context, token string) (*session.Session, error)
 }
 ```
 
 The client sends `auth` as its first message; the gateway validates via the
-Authenticator and replies with `AuthResult{SessionID, UserID}`. `nil` in
-`partyx.Config` falls back to `DevAuth()` with a warning log.
+Authenticator (ctx bounded by `AuthTimeout`, canceled on connection loss)
+and replies with `AuthResult{SessionID, UserID}`. `nil` in `partyx.Config`
+falls back to `DevAuth()` with a warning log.
 
 ## Connection Limits (gateway)
 
-| Setting | Value | Notes |
+Defaults below; every value is a `partyx.Config` field (`MaxMessageSize`,
+`AuthTimeout`, `PongWait`, `WriteWait`, `PingPeriod`, `SendBufferSize`,
+`ShutdownTimeout`).
+
+| Setting | Default | Notes |
 |---------|-------|-------|
 | Read limit | 64 KB | Per frame (matches arpack uint16 length prefixes) |
 | Binary only | — | Text frames rejected with 400 |
@@ -220,3 +242,8 @@ Authenticator and replies with `AuthResult{SessionID, UserID}`. `nil` in
 | Ping / pong | 30 s / 60 s | Dead connections dropped after missed pongs |
 | Send buffer | 256 msgs | Slow consumers are disconnected, never silently dropped |
 | Close | graceful | Pending messages flushed (2 s budget) before close |
+
+Dispatch runs on a per-connection worker goroutine outside the read loop
+(one message at a time, arrival order), so a slow handler never stalls
+frame reads or the liveness deadlines. On shutdown the gateway closes the
+listener, then every client connection, then shuts down all room actors.

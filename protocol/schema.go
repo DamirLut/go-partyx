@@ -86,9 +86,12 @@ type AuthResult struct {
 // joined automatically. Type selects the registered room type
 // (partyx.Room); unknown types create a plain stateless room.
 type CreateRoomRequest struct {
-	Name          string // empty = same as Type
-	Type          string // required
-	MaxPlayers    uint16 // 0 = module default, which itself defaults to unlimited
+	Name       string // empty = same as Type
+	Type       string // required
+	MaxPlayers uint16 // 0 = module default, which itself defaults to unlimited
+	// SingletonMode applies only to plain rooms. When Type matches a
+	// registered module, the mode always comes from module.Singleton and
+	// this field is ignored.
 	SingletonMode SingletonMode
 }
 
