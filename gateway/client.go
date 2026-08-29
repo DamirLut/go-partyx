@@ -24,6 +24,10 @@ const (
 	maxMessageSize = 64 * 1024
 	sendBufferSize = 256
 	flushWait      = 2 * time.Second // budget for draining pending messages on close
+	// Backpressure: when this many messages await the handler goroutine, the
+	// read loop stalls — the connection then dies on its read deadline
+	// instead of growing the queue without bound.
+	handleBufferSize = 64
 )
 
 var nextClientID atomic.Uint64
@@ -35,6 +39,7 @@ type Client struct {
 	id      uint64
 	conn    *websocket.Conn
 	send    chan []byte
+	handles chan *protocol.ClientMessage
 	topics  map[string]struct{}
 	roomIDs map[string]struct{}
 	bus     *eventbus.EventBus
@@ -60,6 +65,7 @@ func NewClient(conn *websocket.Conn, bus *eventbus.EventBus) *Client {
 		id:      id,
 		conn:    conn,
 		send:    make(chan []byte, sendBufferSize),
+		handles: make(chan *protocol.ClientMessage, handleBufferSize),
 		topics:  make(map[string]struct{}),
 		roomIDs: make(map[string]struct{}),
 		bus:     bus,
@@ -232,12 +238,21 @@ func (c *Client) ReadLoop(dispatcher *Dispatcher) {
 	})
 
 	go c.WriteLoop()
+	go c.handleLoop(dispatcher)
 
 	for {
 		messageType, raw, err := c.conn.ReadMessage()
 		if err != nil {
 			return
 		}
+
+		// Any readable frame proves liveness. Without this refresh, a
+		// handler still busy on a previous message could outlive pongWait.
+		wait := authTimeout
+		if c.IsAuthenticated() {
+			wait = pongWait
+		}
+		c.conn.SetReadDeadline(time.Now().Add(wait))
 
 		if messageType != websocket.BinaryMessage {
 			c.SendError(0, "binary messages only", 400)
@@ -262,7 +277,26 @@ func (c *Client) ReadLoop(dispatcher *Dispatcher) {
 			continue
 		}
 
-		dispatcher.Dispatch(c, &msg)
+		// Dispatch off the read loop: a slow handler must not stall frame
+		// reads. handleLoop processes them sequentially in arrival order.
+		select {
+		case c.handles <- &msg:
+		case <-c.done:
+			return
+		}
+	}
+}
+
+// handleLoop runs the dispatcher for one connection, outside the read loop,
+// one message at a time in arrival order.
+func (c *Client) handleLoop(dispatcher *Dispatcher) {
+	for {
+		select {
+		case msg := <-c.handles:
+			dispatcher.Dispatch(c, msg)
+		case <-c.done:
+			return
+		}
 	}
 }
 

@@ -457,3 +457,32 @@ func TestCustomWSPathAndMiddleware(t *testing.T) {
 	}
 	auth(t, conn, "alice")
 }
+
+// TestSlowHandlerDoesNotStallReadLoop: handlers run outside the read loop,
+// so a blocked handler must not prevent frame reads — the app-level ping is
+// echoed while the first request is still in flight.
+func TestSlowHandlerDoesNotStallReadLoop(t *testing.T) {
+	release := make(chan struct{})
+	srv := newTestServer(t, func(rooms *room.Manager, commands *command.Registry) {
+		commands.Register(200, func(ctx *command.Context, payload []byte) (protocol.Marshaler, error) {
+			<-release
+			return nil, nil
+		})
+	})
+
+	c := dialWS(t, srv)
+	auth(t, c, "alice")
+
+	request(t, c, 1, 200, nil)
+
+	// The handler for request 1 is blocked; the ping must still be echoed.
+	sendMsg(t, c, &protocol.ClientMessage{Type: protocol.MessagePing, ID: 2})
+	if msg := readMsg(t, c); msg.Type != protocol.MessagePing || msg.ID != 2 {
+		t.Fatalf("%+v, want ping echo 2 while handler is blocked", msg)
+	}
+
+	close(release)
+	if msg := readUntilID(t, c, 1); msg.Type != protocol.MessageResponse {
+		t.Fatalf("slow handler response: %+v, want response", msg)
+	}
+}
