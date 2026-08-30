@@ -211,9 +211,12 @@ publishes no duplicate `player.joined`.
 
 `eventbus.Event{Op uint16, Payload []byte}` — the payload is encoded once at
 publish time and shared by all subscribers. Topics: `room:<id>` (room events
-+ game events via `r.Broadcast(op, msg)`), `client:<id>` (personal, e.g.
-kicks), `lobby` (room.created/removed). Delivery iterates a subscriber
-snapshot; a panicking subscriber is recovered and logged.
++ game events via `r.Broadcast(op, msg)`), `client:<id>` (personal: kicks
+and room-initiated sends via `r.Send`/`r.SendTo`/`r.BroadcastExcept` —
+the target is re-resolved by `userID` inside the room actor, so it survives
+reconnects — and per-player payloads via `r.BroadcastFunc`), `lobby`
+(room.created/removed). Delivery iterates a subscriber snapshot; a panicking
+subscriber is recovered and logged.
 
 ## Auth
 

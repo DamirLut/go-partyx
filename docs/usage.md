@@ -285,13 +285,30 @@ get the request context, canceled when the connection closes or the server
 shuts down.
 
 Available inside the actor: `r.State` (your state), `r.PlayerList()`,
-`r.HasPlayerID(id)`, `r.RoomInfo()` — direct accessors you may call from
-hooks, handlers and `OnTick`; `r.Broadcast(op, msg)` / `r.BroadcastBytes`
-are safe anywhere. The blocking variants `r.Players()`, `r.HasPlayer()`,
-`r.Info()`, `r.IsOpen()` are for callers **outside** the actor (they submit
-to the inbox and wait) — calling them from a hook or handler deadlocks;
-`r.Close()`/`r.Open()` are blocking too. A panic in a hook/handler is
-logged (to `Config.Logger`) and does not take down the actor.
+`r.HasPlayerID(id)`, `r.PlayerByUserID(userID)`, `r.RoomInfo()` — direct
+accessors you may call from hooks, handlers and `OnTick`; `r.Broadcast(op,
+msg)` / `r.BroadcastBytes` are safe anywhere. The blocking variants
+`r.Players()`, `r.HasPlayer()`, `r.Info()`, `r.IsOpen()` are for callers
+**outside** the actor (they submit to the inbox and wait) — calling them
+from a hook or handler deadlocks; `r.Close()`/`r.Open()` are blocking too.
+A panic in a hook/handler is logged (to `Config.Logger`) and does not take
+down the actor.
+
+**Addressed sends.** Beside the room-wide `r.Broadcast`, the room can
+deliver personal events — published to the target's `client:<id>` topic, so
+other room members never see the payload. All of these read the live player
+list, so like the direct accessors they must be called from **inside** the
+actor:
+
+| Method | Delivery |
+|--------|----------|
+| `r.Send(p, op, msg)` | To one player. The live connection is resolved by `p.UserID`, so a `*Player` captured before a reconnect still reaches the user's current connection. No live player — the message is dropped. |
+| `r.SendTo(userIDs, op, msg)` | To a subset of members, by `userID` (an offer to two sides, a turn reminder). Unknown users are skipped. |
+| `r.BroadcastExcept(except, op, msg)` | To everyone except the listed `userID`s. |
+| `r.BroadcastFunc(op, fn)` | Per-player payloads: `fn(p)` returns that player's own snapshot (hidden wallets, private hands); returning `false` skips the player. |
+
+Clients distinguish personal events from room events by the `channel` field
+(`client:<id>` vs `room:<id>`).
 
 **Room-scoped message routing.** The client simply sends a request with an
 opcode — no roomID. The framework finds the room: opcode → module type →
@@ -321,7 +338,7 @@ already-encoded payload (marshaled once per publish). Topics:
 | Topic | Published by |
 |-------|--------------|
 | `room:<id>` | The room (`player.joined`/`player.left` + your game events via `r.Broadcast`) |
-| `client:<id>` | Personal messages to a client (e.g. `room.kicked`) |
+| `client:<id>` | Personal messages to a client: `room.kicked` and room-initiated sends (`r.Send`/`r.SendTo`/`r.BroadcastExcept`/`r.BroadcastFunc`) |
 | `lobby` | `room.created`, `room.removed` |
 
 The client subscribes itself (a `subscribe` message with a channel) or via
