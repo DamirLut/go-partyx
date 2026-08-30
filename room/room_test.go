@@ -258,6 +258,202 @@ func TestBroadcast(t *testing.T) {
 	}
 }
 
+func TestSendReachesOnlyTheTargetPlayer(t *testing.T) {
+	r, bus := newTestRoom(RoomConfig{Name: "arena", Type: "test"})
+	defer r.Shutdown()
+
+	if err := r.Join(1, "alice"); err != nil {
+		t.Fatalf("join alice: %v", err)
+	}
+	if err := r.Join(2, "bob"); err != nil {
+		t.Fatalf("join bob: %v", err)
+	}
+	alice := &captureSub{id: 1}
+	bob := &captureSub{id: 2}
+	room := &captureSub{id: 100}
+	bus.Subscribe(clientTopic(1), alice)
+	bus.Subscribe(clientTopic(2), bob)
+	bus.Subscribe(r.topic(), room)
+
+	const op = 100
+	p, ok := r.PlayerByUserID("alice")
+	if !ok {
+		t.Fatal("PlayerByUserID(alice) not found")
+	}
+	r.Send(p, op, &protocol.PlayerLeft{PlayerID: 42})
+
+	assertSingleEvent(t, alice, op, 42)
+	if got := bob.ops(); len(got) != 0 {
+		t.Fatalf("bob got events %v, want none", got)
+	}
+	// Personal sends must not leak onto the room topic.
+	if got := room.ops(); len(got) != 0 {
+		t.Fatalf("room topic got events %v, want none", got)
+	}
+}
+
+// Regression: JoinReplace swaps the clientID, so a Player captured before a
+// reconnect must still reach the user's new connection when resolved by
+// userID inside the actor.
+func TestSendResolvesLiveConnectionAfterReconnect(t *testing.T) {
+	r, bus := newTestRoom(RoomConfig{Name: "arena", Type: "test"})
+	defer r.Shutdown()
+
+	if err := r.Join(1, "alice"); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	old := &captureSub{id: 1}
+	fresh := &captureSub{id: 2}
+	bus.Subscribe(clientTopic(1), old)
+	bus.Subscribe(clientTopic(2), fresh)
+
+	stale, ok := r.PlayerByUserID("alice")
+	if !ok {
+		t.Fatal("PlayerByUserID(alice) not found")
+	}
+	if err := r.JoinReplace(1, 2, "alice"); err != nil {
+		t.Fatalf("joinReplace: %v", err)
+	}
+
+	const op = 100
+	r.Send(stale, op, &protocol.PlayerLeft{PlayerID: 42})
+
+	assertSingleEvent(t, fresh, op, 42)
+	if got := old.ops(); len(got) != 0 {
+		t.Fatalf("old connection got events %v, want none", got)
+	}
+}
+
+func TestSendToSkipsUnknownUsersAndDuplicates(t *testing.T) {
+	r, bus := newTestRoom(RoomConfig{Name: "arena", Type: "test"})
+	defer r.Shutdown()
+
+	if err := r.Join(1, "alice"); err != nil {
+		t.Fatalf("join alice: %v", err)
+	}
+	if err := r.Join(2, "bob"); err != nil {
+		t.Fatalf("join bob: %v", err)
+	}
+	alice := &captureSub{id: 1}
+	bob := &captureSub{id: 2}
+	bus.Subscribe(clientTopic(1), alice)
+	bus.Subscribe(clientTopic(2), bob)
+
+	const op = 100
+	// Duplicate entries must not duplicate delivery; carol is not in the room.
+	r.SendTo([]string{"bob", "carol", "bob"}, op, &protocol.PlayerLeft{PlayerID: 42})
+
+	assertSingleEvent(t, bob, op, 42)
+	if got := alice.ops(); len(got) != 0 {
+		t.Fatalf("alice got events %v, want none", got)
+	}
+}
+
+func TestBroadcastExcept(t *testing.T) {
+	r, bus := newTestRoom(RoomConfig{Name: "arena", Type: "test"})
+	defer r.Shutdown()
+
+	for i, user := range []string{"alice", "bob", "carol"} {
+		if err := r.Join(uint64(i+1), user); err != nil {
+			t.Fatalf("join %s: %v", user, err)
+		}
+	}
+	subs := []*captureSub{{id: 1}, {id: 2}, {id: 3}}
+	for _, sub := range subs {
+		bus.Subscribe(clientTopic(sub.id), sub)
+	}
+
+	const op = 100
+	r.BroadcastExcept([]string{"carol"}, op, &protocol.PlayerLeft{PlayerID: 42})
+	assertSingleEvent(t, subs[0], op, 42)
+	assertSingleEvent(t, subs[1], op, 42)
+	if got := subs[2].ops(); len(got) != 0 {
+		t.Fatalf("carol got events %v, want none", got)
+	}
+
+	// An empty except list reaches everyone.
+	r.BroadcastExcept(nil, op, &protocol.PlayerLeft{PlayerID: 43})
+	assertSingleEvent(t, subs[2], op, 43)
+}
+
+func TestBroadcastFuncGivesEachPlayerItsOwnPayload(t *testing.T) {
+	r, bus := newTestRoom(RoomConfig{Name: "arena", Type: "test"})
+	defer r.Shutdown()
+
+	if err := r.Join(1, "alice"); err != nil {
+		t.Fatalf("join alice: %v", err)
+	}
+	if err := r.Join(2, "bob"); err != nil {
+		t.Fatalf("join bob: %v", err)
+	}
+	alice := &captureSub{id: 1}
+	bob := &captureSub{id: 2}
+	bus.Subscribe(clientTopic(1), alice)
+	bus.Subscribe(clientTopic(2), bob)
+
+	const op = 100
+	seen := 0
+	r.BroadcastFunc(op, func(p *Player) (protocol.Marshaler, bool) {
+		seen++
+		// Alice gets a personal payload; bob is skipped entirely.
+		if p.UserID == "alice" {
+			return &protocol.PlayerLeft{PlayerID: 42}, true
+		}
+		return nil, false
+	})
+	if seen != 2 {
+		t.Fatalf("fn called %d times, want 2", seen)
+	}
+
+	assertSingleEvent(t, alice, op, 42)
+	if got := bob.ops(); len(got) != 0 {
+		t.Fatalf("bob got events %v, want none", got)
+	}
+}
+
+func TestPlayerByUserID(t *testing.T) {
+	r, _ := newTestRoom(RoomConfig{Name: "arena", Type: "test"})
+	defer r.Shutdown()
+
+	if err := r.Join(1, "alice"); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	p, ok := r.PlayerByUserID("alice")
+	if !ok || p.UserID != "alice" || p.ID != 1 {
+		t.Fatalf("PlayerByUserID(alice) = (%v, %v), want player 1", p, ok)
+	}
+	if _, ok := r.PlayerByUserID("ghost"); ok {
+		t.Fatal("PlayerByUserID(ghost) found a player, want none")
+	}
+
+	r.Leave(1)
+	if _, ok := r.PlayerByUserID("alice"); ok {
+		t.Fatal("PlayerByUserID(alice) found a player after leave, want none")
+	}
+}
+
+// assertSingleEvent requires that sub received exactly one event with the
+// given op and decodes its payload as PlayerLeft with the given PlayerID.
+func assertSingleEvent(t *testing.T, sub *captureSub, op uint16, playerID uint64) {
+	t.Helper()
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if len(sub.events) != 1 {
+		t.Fatalf("events = %v, want exactly 1 event", sub.events)
+	}
+	e := sub.events[0]
+	if e.Op != op {
+		t.Fatalf("op = %d, want %d", e.Op, op)
+	}
+	var decoded protocol.PlayerLeft
+	if _, err := decoded.Unmarshal(e.Payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if decoded.PlayerID != playerID {
+		t.Fatalf("PlayerID = %d, want %d", decoded.PlayerID, playerID)
+	}
+}
+
 // Regression: a panicking module hook must not kill the room actor.
 func TestPanickingHandlerKeepsRoomAlive(t *testing.T) {
 	mod := NewModule[EmptyState]("test")

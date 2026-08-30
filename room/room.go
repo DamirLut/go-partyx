@@ -21,8 +21,10 @@ import (
 // the actor to run them — they are for callers outside the actor. Calling a
 // blocking method from a hook, message handler or OnTick deadlocks: the
 // actor is busy running the very code that waits on it. Code running inside
-// the actor must use the direct accessors instead: PlayerList, HasPlayerID
-// and RoomInfo read the state without the inbox.
+// the actor must use the direct accessors instead: PlayerList, HasPlayerID,
+// PlayerByUserID and RoomInfo read the state without the inbox, and Send,
+// SendTo, BroadcastExcept and BroadcastFunc resolve targets against the live
+// player list.
 type Room[S any] struct {
 	id     string
 	config RoomConfig
@@ -332,6 +334,19 @@ func (r *Room[S]) HasPlayerID(clientID uint64) bool {
 	return r.hasPlayer(clientID)
 }
 
+// PlayerByUserID returns the live player of userID. If several connections
+// of the same user are in the room (possible in SingletonAllow rooms), one
+// of them is returned. It reads the room state directly, so it must only be
+// called from inside the actor.
+func (r *Room[S]) PlayerByUserID(userID string) (*Player, bool) {
+	for _, p := range r.players {
+		if p.UserID == userID {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
 // RoomInfo returns the same snapshot as Info. It reads the room state
 // directly, so it must only be called from inside the actor. From outside
 // the actor use Info.
@@ -373,6 +388,71 @@ func (r *Room[S]) Broadcast(op uint16, msg protocol.Marshaler) {
 // BroadcastBytes publishes a pre-encoded payload to the room topic.
 func (r *Room[S]) BroadcastBytes(op uint16, payload []byte) {
 	r.bus.Publish(r.topic(), eventbus.NewEventBytes(op, payload))
+}
+
+// Send delivers a personal event to the player: it is published to the
+// player's personal topic instead of the room topic, so other room members
+// never see it. The live connection is resolved by p.UserID inside the
+// actor, so a Player captured before a reconnect (JoinReplace swaps the
+// clientID) still reaches the user's current connection. If the user has no
+// live player in the room the message is dropped. It reads the room state
+// directly, so it must only be called from inside the actor — module hooks,
+// message handlers and OnTick.
+func (r *Room[S]) Send(p *Player, op uint16, msg protocol.Marshaler) {
+	r.sendToUserIDs([]string{p.UserID}, op, msg)
+}
+
+// SendTo delivers a personal event to a subset of room members, addressed by
+// stable userID (see Send). Users without a live player in the room are
+// skipped. Must only be called from inside the actor.
+func (r *Room[S]) SendTo(userIDs []string, op uint16, msg protocol.Marshaler) {
+	r.sendToUserIDs(userIDs, op, msg)
+}
+
+// BroadcastExcept delivers a room-wide event to every player except the
+// listed userIDs (see Send for addressing and delivery). Must only be called
+// from inside the actor.
+func (r *Room[S]) BroadcastExcept(except []string, op uint16, msg protocol.Marshaler) {
+	payload := protocol.Encode(msg)
+	skip := make(map[string]struct{}, len(except))
+	for _, id := range except {
+		skip[id] = struct{}{}
+	}
+	for _, p := range r.players {
+		if _, ok := skip[p.UserID]; ok {
+			continue
+		}
+		r.bus.Publish(clientTopic(p.ID), eventbus.NewEventBytes(op, payload))
+	}
+}
+
+// BroadcastFunc runs fn for every player and delivers each returned payload
+// only to that player's personal topic, so every member can receive its own
+// snapshot of the state. Returning false skips the player. Must only be
+// called from inside the actor.
+func (r *Room[S]) BroadcastFunc(op uint16, fn func(p *Player) (protocol.Marshaler, bool)) {
+	for _, p := range r.players {
+		msg, ok := fn(p)
+		if !ok {
+			continue
+		}
+		r.bus.Publish(clientTopic(p.ID), eventbus.NewEvent(op, msg))
+	}
+}
+
+// sendToUserIDs encodes the payload once and publishes it to the personal
+// topic of every connection whose player matches one of userIDs.
+func (r *Room[S]) sendToUserIDs(userIDs []string, op uint16, msg protocol.Marshaler) {
+	payload := protocol.Encode(msg)
+	want := make(map[string]struct{}, len(userIDs))
+	for _, id := range userIDs {
+		want[id] = struct{}{}
+	}
+	for _, p := range r.players {
+		if _, ok := want[p.UserID]; ok {
+			r.bus.Publish(clientTopic(p.ID), eventbus.NewEventBytes(op, payload))
+		}
+	}
 }
 
 func (r *Room[S]) HandlesOp(op uint16) bool {

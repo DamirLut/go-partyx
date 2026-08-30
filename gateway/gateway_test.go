@@ -371,6 +371,108 @@ func TestRoomModuleFlow(t *testing.T) {
 	}
 }
 
+// readEventOnPersonalChannel reads events until one with the given op
+// arrives and requires it to ride the connection's client:<id> topic.
+// Events on other channels (e.g. the room topic) are skipped.
+func readEventOnPersonalChannel(t *testing.T, conn *websocket.Conn, op uint16) *protocol.ServerMessage {
+	t.Helper()
+	for {
+		msg := readMsg(t, conn)
+		if msg.Type != protocol.MessageEvent || msg.Op != op {
+			continue
+		}
+		if !strings.HasPrefix(msg.Channel, "client:") {
+			t.Fatalf("event channel = %q, want client:<id>", msg.Channel)
+		}
+		return msg
+	}
+}
+
+// assertNoEvent requires that no data message arrives within d.
+func assertNoEvent(t *testing.T, conn *websocket.Conn, d time.Duration) {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(d))
+	_, _, err := conn.ReadMessage()
+	if err == nil {
+		t.Fatal("received a message, want none")
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return
+	}
+	t.Fatalf("read error = %v, want read timeout", err)
+}
+
+// TestPersonalSendsEndToEnd: room-initiated personal messages reach exactly
+// their target, on the target's client:<id> topic — Send for one player and
+// BroadcastFunc for per-player payloads.
+func TestPersonalSendsEndToEnd(t *testing.T) {
+	const (
+		opSend   = 100 // Send to the requesting player only
+		opFanout = 101 // BroadcastFunc: each player gets its own payload
+	)
+
+	srv := newTestServer(t, func(rooms *room.Manager, _ *command.Registry) {
+		mod := room.NewModule[echoState]("private").
+			Handle(opSend, func(ctx context.Context, r *room.Room[echoState], p *room.Player, req *protocol.Kicked) (*protocol.Kicked, error) {
+				r.Send(p, opSend, &protocol.Kicked{Reason: "for-" + p.UserID, RoomID: r.ID()})
+				return nil, nil
+			}).
+			Handle(opFanout, func(ctx context.Context, r *room.Room[echoState], p *room.Player, req *protocol.Kicked) (*protocol.Kicked, error) {
+				r.BroadcastFunc(opFanout, func(p *room.Player) (protocol.Marshaler, bool) {
+					return &protocol.Kicked{Reason: "hand-" + p.UserID, RoomID: r.ID()}, true
+				})
+				return nil, nil
+			})
+		rooms.RegisterModule(mod)
+	})
+
+	c1 := dialWS(t, srv)
+	auth(t, c1, "alice")
+	created := createRoom(t, c1, 1, &protocol.CreateRoomRequest{Type: "private"})
+
+	c2 := dialWS(t, srv)
+	auth(t, c2, "bob")
+	request(t, c2, 2, uint16(protocol.MethodRoomJoin), &protocol.JoinRoomRequest{RoomID: created.ID})
+	// The join handler publishes player.joined before responding, so both
+	// sides receive the event first; consume it on each side to leave the
+	// queues empty before the personal sends start.
+	readUntilEvent(t, c1, "room:"+created.ID, uint16(protocol.EventPlayerJoined))
+	readUntilEvent(t, c2, "room:"+created.ID, uint16(protocol.EventPlayerJoined))
+	if msg := readUntilID(t, c2, 2); msg.Type != protocol.MessageResponse {
+		t.Fatalf("room.join failed: %+v", msg)
+	}
+
+	// Send reaches only the requesting player, on its personal topic. The
+	// handler publishes the event before responding, so the event must be
+	// read first — readUntilID discards any frames it skips over.
+	request(t, c1, 3, opSend, &protocol.Kicked{Reason: "go"})
+	ev := readEventOnPersonalChannel(t, c1, opSend)
+	if msg := readUntilID(t, c1, 3); msg.Type != protocol.MessageResponse {
+		t.Fatalf("send request failed: %+v", msg)
+	}
+	if kick := decodePayload[protocol.Kicked](t, ev); kick.Reason != "for-alice" {
+		t.Fatalf("send reason = %q, want for-alice", kick.Reason)
+	}
+
+	// BroadcastFunc gives each player its own payload on its own topic.
+	request(t, c1, 4, opFanout, &protocol.Kicked{Reason: "go"})
+	if ev := readEventOnPersonalChannel(t, c1, opFanout); decodePayload[protocol.Kicked](t, ev).Reason != "hand-alice" {
+		t.Fatal("alice got the wrong fanout payload")
+	}
+	if ev := readEventOnPersonalChannel(t, c2, opFanout); decodePayload[protocol.Kicked](t, ev).Reason != "hand-bob" {
+		t.Fatal("bob got the wrong fanout payload")
+	}
+	if msg := readUntilID(t, c1, 4); msg.Type != protocol.MessageResponse {
+		t.Fatalf("fanout request failed: %+v", msg)
+	}
+
+	// bob's queue must be empty: he never saw alice's private send. This
+	// must be the last read on c2 — a timed-out read leaves the connection
+	// unreadable (gorilla caches the error).
+	assertNoEvent(t, c2, 300*time.Millisecond)
+}
+
 func TestPingEcho(t *testing.T) {
 	srv := newTestServer(t, nil)
 	c := dialWS(t, srv)
