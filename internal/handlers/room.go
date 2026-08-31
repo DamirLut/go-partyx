@@ -12,6 +12,19 @@ func RegisterRoomHandlers(registry *command.Registry, mgr *room.Manager) {
 	registry.Register(uint16(protocol.MethodRoomLeave), leaveRoomHandler(mgr))
 }
 
+// optionsMap collapses the wire representation of CreateRoomRequest.Options
+// into the map the room config carries. Later keys win, like a JSON object.
+func optionsMap(options []protocol.CreateOption) map[string]string {
+	if len(options) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(options))
+	for _, o := range options {
+		m[o.Key] = o.Value
+	}
+	return m
+}
+
 func createRoomHandler(mgr *room.Manager) command.Handler {
 	return func(ctx *command.Context, payload []byte) (protocol.Marshaler, error) {
 		req, err := protocol.Decode[protocol.CreateRoomRequest](payload)
@@ -27,6 +40,7 @@ func createRoomHandler(mgr *room.Manager) command.Handler {
 			Type:          req.Type,
 			MaxPlayers:    req.MaxPlayers,
 			SingletonMode: req.SingletonMode,
+			Options:       optionsMap(req.Options),
 		})
 
 		// Subscribe before joining so no room events are missed.

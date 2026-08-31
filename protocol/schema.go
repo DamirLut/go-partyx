@@ -93,6 +93,15 @@ type CreateRoomRequest struct {
 	// registered module, the mode always comes from module.Singleton and
 	// this field is ignored.
 	SingletonMode SingletonMode
+	// Options carries opaque key-value pairs handed to the room's module
+	// untouched (Room.Options); partyx never interprets them.
+	Options []CreateOption
+}
+
+// CreateOption is one key-value pair of CreateRoomRequest.Options.
+type CreateOption struct {
+	Key   string
+	Value string
 }
 
 // JoinRoomRequest is the payload of MethodRoomJoin.

@@ -243,11 +243,15 @@ func (m *CreateRoomRequest) Marshal(buf []byte) []byte {
 	buf = append(buf, m.Type...)
 	buf = binary.LittleEndian.AppendUint16(buf, m.MaxPlayers)
 	buf = append(buf, uint8(m.SingletonMode))
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(m.Options), "slice length for Options"))
+	for _iOptions := range m.Options {
+		buf = m.Options[_iOptions].Marshal(buf)
+	}
 	return buf
 }
 
 func (m *CreateRoomRequest) Unmarshal(data []byte) (int, error) {
-	if len(data) < 7 {
+	if len(data) < 9 {
 		return 0, errors.New("arpack: buffer too short for CreateRoomRequest")
 	}
 	offset := 0
@@ -287,6 +291,68 @@ func (m *CreateRoomRequest) Unmarshal(data []byte) (int, error) {
 	}
 	m.SingletonMode = SingletonMode(data[offset])
 	offset += 1
+	if len(data) < offset+2 {
+		return 0, errors.New("arpack: buffer too short")
+	}
+	_lenOptions := int(binary.LittleEndian.Uint16(data[offset:]))
+	offset += 2
+	if cap(m.Options) < _lenOptions {
+		m.Options = make([]CreateOption, _lenOptions)
+	} else {
+		if _lenOptions < cap(m.Options) {
+			clear(m.Options[_lenOptions:cap(m.Options)])
+		}
+		m.Options = m.Options[:_lenOptions]
+	}
+	for _iOptions := 0; _iOptions < _lenOptions; _iOptions++ {
+		_nOptions__iOptions_, _err := m.Options[_iOptions].Unmarshal(data[offset:])
+		if _err != nil {
+			return 0, _err
+		}
+		offset += _nOptions__iOptions_
+	}
+	return offset, nil
+}
+
+func (m *CreateOption) Marshal(buf []byte) []byte {
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(m.Key), "string length for Key"))
+	buf = append(buf, m.Key...)
+	buf = binary.LittleEndian.AppendUint16(buf, arpackEnsureUint16Length(len(m.Value), "string length for Value"))
+	buf = append(buf, m.Value...)
+	return buf
+}
+
+func (m *CreateOption) Unmarshal(data []byte) (int, error) {
+	if len(data) < 4 {
+		return 0, errors.New("arpack: buffer too short for CreateOption")
+	}
+	offset := 0
+	if len(data) < offset+2 {
+		return 0, errors.New("arpack: buffer too short")
+	}
+	_slenm_Key := int(binary.LittleEndian.Uint16(data[offset:]))
+	offset += 2
+	if len(data) < offset+_slenm_Key {
+		return 0, errors.New("arpack: buffer too short")
+	}
+	_bm_Key := data[offset : offset+_slenm_Key]
+	if !arpackStringEqualBytes(m.Key, _bm_Key) {
+		m.Key = string(_bm_Key)
+	}
+	offset += _slenm_Key
+	if len(data) < offset+2 {
+		return 0, errors.New("arpack: buffer too short")
+	}
+	_slenm_Value := int(binary.LittleEndian.Uint16(data[offset:]))
+	offset += 2
+	if len(data) < offset+_slenm_Value {
+		return 0, errors.New("arpack: buffer too short")
+	}
+	_bm_Value := data[offset : offset+_slenm_Value]
+	if !arpackStringEqualBytes(m.Value, _bm_Value) {
+		m.Value = string(_bm_Value)
+	}
+	offset += _slenm_Value
 	return offset, nil
 }
 

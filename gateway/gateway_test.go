@@ -371,6 +371,36 @@ func TestRoomModuleFlow(t *testing.T) {
 	}
 }
 
+// TestCreateOptionsReachModule: key-value options sent in room.create ride
+// the wire to the room's module untouched.
+func TestCreateOptionsReachModule(t *testing.T) {
+	const opEcho = 100
+
+	srv := newTestServer(t, func(rooms *room.Manager, _ *command.Registry) {
+		mod := room.NewModule[echoState]("echo").
+			Handle(opEcho, func(ctx context.Context, r *room.Room[echoState], p *room.Player, req *protocol.Kicked) (*protocol.Kicked, error) {
+				return &protocol.Kicked{Reason: r.Options()["difficulty"], RoomID: r.ID()}, nil
+			})
+		rooms.RegisterModule(mod)
+	})
+
+	c := dialWS(t, srv)
+	auth(t, c, "alice")
+	createRoom(t, c, 1, &protocol.CreateRoomRequest{
+		Type:    "echo",
+		Options: []protocol.CreateOption{{Key: "difficulty", Value: "hard"}},
+	})
+
+	request(t, c, 2, opEcho, &protocol.Kicked{})
+	msg := readUntilID(t, c, 2)
+	if msg.Type != protocol.MessageResponse {
+		t.Fatalf("echo failed: %+v", msg)
+	}
+	if resp := decodePayload[protocol.Kicked](t, msg); resp.Reason != "hard" {
+		t.Fatalf("options did not reach the module: %+v", resp)
+	}
+}
+
 // readEventOnPersonalChannel reads events until one with the given op
 // arrives and requires it to ride the connection's client:<id> topic.
 // Events on other channels (e.g. the room topic) are skipped.

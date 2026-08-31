@@ -251,6 +251,37 @@ func TestModuleBackedRoomUsesModuleConfig(t *testing.T) {
 	}
 }
 
+func TestCreateRequestOptionsReachRoom(t *testing.T) {
+	m := newTestManager()
+	m.RegisterModule(NewModule[gameState]("duel"))
+
+	// Module-backed room: request options ride through the module base config.
+	r := m.Create(RoomConfig{Type: "duel", Options: map[string]string{"difficulty": "hard"}})
+	defer m.Remove(r.ID())
+
+	mod, ok := r.(*Room[gameState])
+	if !ok {
+		t.Fatalf("room type = %T, want *Room[gameState]", r)
+	}
+	if got := mod.Options(); len(got) != 1 || got["difficulty"] != "hard" {
+		t.Fatalf("options = %v, want [difficulty:hard]", got)
+	}
+
+	// A module room created without options keeps them empty.
+	plain := m.Create(RoomConfig{Type: "duel"})
+	defer m.Remove(plain.ID())
+	if got := plain.(*Room[gameState]).Options(); len(got) != 0 {
+		t.Fatalf("options = %v, want empty", got)
+	}
+
+	// A plain stateless room carries the options as is.
+	p := m.Create(RoomConfig{Type: "scrim", Options: map[string]string{"map": "walls"}})
+	defer m.Remove(p.ID())
+	if got := p.Config().Options; len(got) != 1 || got["map"] != "walls" {
+		t.Fatalf("plain options = %v, want [map:walls]", got)
+	}
+}
+
 func TestDispatchRoomMessage(t *testing.T) {
 	m := newTestManager()
 	mod := NewModule[gameState]("duel").

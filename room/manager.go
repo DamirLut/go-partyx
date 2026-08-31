@@ -76,8 +76,8 @@ func (m *Manager) OpType(op uint16) (string, bool) {
 // Create builds a room, wires auto-removal when its last player leaves, and
 // publishes room.created to the lobby topic. If config.Type matches a
 // registered module, the module provides the game state and default config
-// (the request may only override Name and MaxPlayers); otherwise a plain
-// stateless room is created.
+// (the request may only override Name, MaxPlayers and Options); otherwise a
+// plain stateless room is created.
 func (m *Manager) Create(config RoomConfig) AnyRoom {
 	m.mu.RLock()
 	mod := m.modules[config.Type]
@@ -92,6 +92,9 @@ func (m *Manager) Create(config RoomConfig) AnyRoom {
 		}
 		if config.MaxPlayers != 0 {
 			base.MaxPlayers = config.MaxPlayers
+		}
+		if len(config.Options) > 0 {
+			base.Options = config.Options
 		}
 		base.ApplyDefaults()
 		r = mod.Create(base, m.bus, m.logger)

@@ -17,6 +17,9 @@ type RoomConfig struct {
 	Type          string
 	MaxPlayers    uint16 // 0 = unlimited
 	SingletonMode protocol.SingletonMode
+	// Options is opaque creation data handed to the module untouched
+	// (Room.Options); partyx never interprets it.
+	Options map[string]string
 }
 
 func (c *RoomConfig) ApplyDefaults() {

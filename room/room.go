@@ -22,7 +22,8 @@ import (
 // blocking method from a hook, message handler or OnTick deadlocks: the
 // actor is busy running the very code that waits on it. Code running inside
 // the actor must use the direct accessors instead: PlayerList, HasPlayerID,
-// PlayerByUserID and RoomInfo read the state without the inbox, and Send,
+// PlayerByUserID, Config, Options and RoomInfo read the state without the
+// inbox, and Send,
 // SendTo, BroadcastExcept and BroadcastFunc resolve targets against the live
 // player list.
 type Room[S any] struct {
@@ -160,6 +161,13 @@ func (r *Room[S]) ID() string {
 
 func (r *Room[S]) Config() RoomConfig {
 	return r.config
+}
+
+// Options returns the opaque creation options the room was created with.
+// Direct accessor: config is immutable after construction, so it is safe
+// from inside the actor (hooks, handlers, OnTick).
+func (r *Room[S]) Options() map[string]string {
+	return r.config.Options
 }
 
 // Join adds a player. Rejoining with the same client is idempotent and
