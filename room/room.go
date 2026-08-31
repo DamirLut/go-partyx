@@ -37,6 +37,8 @@ type Room[S any] struct {
 
 	players map[uint64]*Player
 	isOpen  bool
+	// emptyTimer arms the EmptyGrace removal; guarded by the actor.
+	emptyTimer *time.Timer
 
 	inbox   chan func(*Room[S])
 	bus     *eventbus.EventBus
@@ -92,6 +94,7 @@ func (r *Room[S]) loop() {
 		if ticker != nil {
 			ticker.Stop()
 		}
+		r.cancelEmptyRemoval()
 		if r.module.onClose != nil {
 			r.safe("OnClose", func() { r.module.onClose(r.ctx, r) })
 		}
@@ -186,6 +189,7 @@ func (r *Room[S]) Join(clientID uint64, userID string) error {
 		default:
 			p := &Player{ID: clientID, UserID: userID, JoinedAt: time.Now().Unix()}
 			r.players[clientID] = p
+			r.cancelEmptyRemoval()
 			joined = true
 			if r.module.onJoin != nil {
 				r.module.onJoin(r.ctx, r, p)
@@ -230,6 +234,7 @@ func (r *Room[S]) JoinReplace(oldClientID, clientID uint64, userID string) error
 		}
 		p := &Player{ID: clientID, UserID: userID, JoinedAt: time.Now().Unix()}
 		r.players[clientID] = p
+		r.cancelEmptyRemoval()
 		if r.module.onJoin != nil {
 			r.module.onJoin(r.ctx, r, p)
 		}
@@ -270,7 +275,34 @@ func (r *Room[S]) Leave(clientID uint64) {
 	r.bus.Publish(r.topic(), eventbus.NewEvent(uint16(protocol.EventPlayerLeft),
 		&protocol.PlayerLeft{PlayerID: clientID}))
 	if empty && r.onEmpty != nil {
+		r.scheduleEmptyRemoval()
+	}
+}
+
+// scheduleEmptyRemoval arms the EmptyGrace removal: once the grace runs out
+// with the room still empty, the on-empty callback removes it. Without a
+// grace the callback fires right away. Runs inside the room actor.
+func (r *Room[S]) scheduleEmptyRemoval() {
+	r.cancelEmptyRemoval()
+	if r.config.EmptyGrace <= 0 {
 		go r.onEmpty(r.id)
+		return
+	}
+	r.emptyTimer = time.AfterFunc(r.config.EmptyGrace, func() {
+		r.do(func(r *Room[S]) {
+			if len(r.players) == 0 {
+				go r.onEmpty(r.id)
+			}
+		})
+	})
+}
+
+// cancelEmptyRemoval drops a pending empty-grace removal: the room has
+// players again. Runs inside the room actor.
+func (r *Room[S]) cancelEmptyRemoval() {
+	if r.emptyTimer != nil {
+		r.emptyTimer.Stop()
+		r.emptyTimer = nil
 	}
 }
 

@@ -51,6 +51,15 @@ func (b *RoomBuilder[S]) Singleton(mode protocol.SingletonMode) *RoomBuilder[S] 
 	return b
 }
 
+// EmptyGrace keeps an emptied room alive for the given duration before it
+// is removed, so a disconnected player can reconnect into their seat; a
+// join during the grace cancels the removal. The create request cannot
+// override it.
+func (b *RoomBuilder[S]) EmptyGrace(d time.Duration) *RoomBuilder[S] {
+	b.module.EmptyGrace(d)
+	return b
+}
+
 // OnInit runs synchronously at construction, before the room is shared. ctx
 // is the room's lifetime context.
 func (b *RoomBuilder[S]) OnInit(fn func(ctx context.Context, r *room.Room[S])) *RoomBuilder[S] {

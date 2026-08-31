@@ -190,6 +190,12 @@ singleton enforcement usable without a module. For module-backed rooms the
 module config wins for `SingletonMode`; `Name`/`MaxPlayers` may be
 overridden by the create request.
 
+`EmptyGrace` (module-set, not overridable by the create request) delays the
+removal: the emptied room stays listed and joinable for the grace duration,
+so a disconnected player can reconnect into their seat, and a join during
+the grace cancels the removal. Zero (the default) removes the room as soon
+as it empties.
+
 Server shutdown runs the same path for every room: `app.Run`'s context
 cancel → gateway teardown → `Manager.ShutdownAll` → `Shutdown` → `OnClose`
 per room (no `room.removed` events at that point — nobody is listening).

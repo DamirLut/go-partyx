@@ -1,6 +1,10 @@
 package room
 
-import "github.com/damirlut/go-partyx/protocol"
+import (
+	"time"
+
+	"github.com/damirlut/go-partyx/protocol"
+)
 
 // Player is a connected client inside a room. Fields are set once at join
 // and never mutated, so snapshots are safe to read from anywhere.
@@ -20,6 +24,10 @@ type RoomConfig struct {
 	// Options is opaque creation data handed to the module untouched
 	// (Room.Options); partyx never interprets it.
 	Options map[string]string
+	// EmptyGrace is how long an empty room survives before removal, giving
+	// a disconnected player time to reconnect into their seat. Zero removes
+	// the room as soon as it empties.
+	EmptyGrace time.Duration
 }
 
 func (c *RoomConfig) ApplyDefaults() {
