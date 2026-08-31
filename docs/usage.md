@@ -285,7 +285,8 @@ get the request context, canceled when the connection closes or the server
 shuts down.
 
 Available inside the actor: `r.State` (your state), `r.PlayerList()`,
-`r.HasPlayerID(id)`, `r.PlayerByUserID(userID)`, `r.RoomInfo()` — direct
+`r.HasPlayerID(id)`, `r.PlayerByUserID(userID)`, `r.Options()`,
+`r.RoomInfo()` — direct
 accessors you may call from hooks, handlers and `OnTick`; `r.Broadcast(op,
 msg)` / `r.BroadcastBytes` are safe anywhere. The blocking variants
 `r.Players()`, `r.HasPlayer()`, `r.Info()`, `r.IsOpen()` are for callers
@@ -322,6 +323,17 @@ addressing unambiguous, keep your room types singleton (`reject`/`replace`)
 always comes from the module; `name`/`maxPlayers` may be overridden by the
 client). An unregistered type creates an "empty" room without state — lobby
 and singleton modes still work.
+
+**Room options.** `room.create` also carries opaque key-value `options`
+(`CreateOption[]`). partyx never interprets them — the module does. They
+are handed to the room config untouched (the request's options replace the
+module defaults as a whole) and are readable from inside the actor:
+
+```go
+OnJoin(func(ctx context.Context, r *room.Room[WordState], p *room.Player) {
+    if r.Options()["mode"] == "blitz" { r.State.RoundSeconds = 10 }
+})
+```
 
 **Lifecycle:** the last player leaving removes the room automatically
 (`OnClose` → a `room.removed` event in `lobby`). A client disconnect is

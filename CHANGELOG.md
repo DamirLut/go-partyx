@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-31
+
+### Added
+
+- Opaque room creation options. `CreateRoomRequest.Options` carries
+  key-value pairs (`CreateOption`) that partyx never interprets; the module
+  reads them via `Room.Options()` (a direct accessor, safe inside the actor)
+  or `RoomConfig.Options`. For module-backed rooms the request's options
+  replace the module defaults as a whole; plain rooms store them as is.
+
 ## [0.2.0] - 2026-08-30
 
 ### Added
@@ -52,5 +62,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   connection settings, structured logging with slog, consumer-owned gin
   engine with configurable WS path, CI and dependabot.
 
+[0.3.0]: https://github.com/damirlut/go-partyx/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/damirlut/go-partyx/compare/v0.0.1...v0.2.0
 [0.0.1]: https://github.com/damirlut/go-partyx/releases/tag/v0.0.1
