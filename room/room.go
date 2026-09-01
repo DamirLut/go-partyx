@@ -39,6 +39,9 @@ type Room[S any] struct {
 	isOpen  bool
 	// emptyTimer arms the EmptyGrace removal; guarded by the actor.
 	emptyTimer *time.Timer
+	// keepOnEmpty disables the auto-removal of an emptied room entirely
+	// (Room.SetKeepOnEmpty); guarded by the actor.
+	keepOnEmpty bool
 
 	inbox   chan func(*Room[S])
 	bus     *eventbus.EventBus
@@ -229,7 +232,7 @@ func (r *Room[S]) JoinReplace(oldClientID, clientID uint64, userID string) error
 		}
 		if r.config.MaxPlayers > 0 && uint16(len(r.players)) >= r.config.MaxPlayers {
 			joinErr = ErrRoomFull
-			becameEmpty = len(r.players) == 0
+			becameEmpty = len(r.players) == 0 && !r.keepOnEmpty
 			return
 		}
 		p := &Player{ID: clientID, UserID: userID, JoinedAt: time.Now().Unix()}
@@ -275,14 +278,40 @@ func (r *Room[S]) Leave(clientID uint64) {
 	r.bus.Publish(r.topic(), eventbus.NewEvent(uint16(protocol.EventPlayerLeft),
 		&protocol.PlayerLeft{PlayerID: clientID}))
 	if empty && r.onEmpty != nil {
+		// emptyTimer is guarded by the actor (the shutdown path reads it),
+		// so arm the removal on the actor, not on this goroutine.
+		r.do(func(r *Room[S]) { r.scheduleEmptyRemoval() })
+	}
+}
+
+// SetKeepOnEmpty toggles the auto-removal of an emptied room. With the keep
+// on, the room survives its last leave indefinitely — it stays listed and
+// joinable, and its actor keeps running (a configured game loop keeps
+// ticking), e.g. a match played out by bots until a player returns. It
+// still closes on an explicit Manager.Remove or server shutdown. Turning
+// the keep off on an already emptied room starts the normal removal
+// (immediately, or after the EmptyGrace). Direct method: call it from
+// inside the actor — hooks, handlers, OnTick.
+func (r *Room[S]) SetKeepOnEmpty(keep bool) {
+	wasKept := r.keepOnEmpty
+	r.keepOnEmpty = keep
+	if keep {
+		r.cancelEmptyRemoval()
+		return
+	}
+	if wasKept && len(r.players) == 0 {
 		r.scheduleEmptyRemoval()
 	}
 }
 
 // scheduleEmptyRemoval arms the EmptyGrace removal: once the grace runs out
 // with the room still empty, the on-empty callback removes it. Without a
-// grace the callback fires right away. Runs inside the room actor.
+// grace the callback fires right away. A kept room (SetKeepOnEmpty) is
+// never removed here. Runs inside the room actor.
 func (r *Room[S]) scheduleEmptyRemoval() {
+	if r.keepOnEmpty {
+		return
+	}
 	r.cancelEmptyRemoval()
 	if r.config.EmptyGrace <= 0 {
 		go r.onEmpty(r.id)
@@ -290,7 +319,7 @@ func (r *Room[S]) scheduleEmptyRemoval() {
 	}
 	r.emptyTimer = time.AfterFunc(r.config.EmptyGrace, func() {
 		r.do(func(r *Room[S]) {
-			if len(r.players) == 0 {
+			if !r.keepOnEmpty && len(r.players) == 0 {
 				go r.onEmpty(r.id)
 			}
 		})

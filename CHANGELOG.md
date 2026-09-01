@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - 2026-09-01
 
 ### Added
 
@@ -13,6 +13,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   disconnected player can reconnect into their seat. A join during the
   grace cancels the removal; a room still empty when it runs out is removed
   as before (the zero default keeps the immediate removal).
+- `Room.SetKeepOnEmpty(keep)` — a runtime toggle (from inside the actor)
+  that disables the removal of an emptied room entirely: the room stays
+  listed and joinable and its game loop keeps ticking — a match played out
+  by bots until a player returns. Turning it off on an emptied room
+  resumes the normal removal; an explicit `Manager.Remove` or server
+  shutdown closes the room regardless.
+
+### Fixed
+
+- `Leave` armed the empty-removal timer off the room actor, racing the
+  actor's shutdown path; the timer is now armed inside the actor.
 
 ## [0.3.0] - 2026-08-31
 
@@ -72,6 +83,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   connection settings, structured logging with slog, consumer-owned gin
   engine with configurable WS path, CI and dependabot.
 
+[0.3.1]: https://github.com/damirlut/go-partyx/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/damirlut/go-partyx/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/damirlut/go-partyx/compare/v0.0.1...v0.2.0
 [0.0.1]: https://github.com/damirlut/go-partyx/releases/tag/v0.0.1

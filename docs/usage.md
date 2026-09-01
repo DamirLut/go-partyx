@@ -342,6 +342,16 @@ handled by the framework (leave from all rooms). When the server shuts down
 connection, runs the disconnect cleanup, and shuts down all room actors —
 `OnClose` fires for every room.
 
+**Empty rooms.** Two module-side knobs shape what happens when the last
+player leaves. `EmptyGrace(d)` (a builder method) keeps the emptied room
+listed and joinable for `d` — a reconnecting player re-enters their seat,
+and a join during the grace cancels the removal. `r.SetKeepOnEmpty(true)`
+(called from inside the actor) disables the removal entirely: the room —
+and its running game loop — lives on, e.g. a match played out by bots until
+a player returns; turning it off on an emptied room starts the normal
+removal. An explicit `Manager.Remove` or server shutdown closes a room
+either way.
+
 ## 5. Events
 
 EventBus is pub/sub over string topics; an event = opcode + an

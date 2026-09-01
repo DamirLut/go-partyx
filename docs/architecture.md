@@ -196,6 +196,12 @@ so a disconnected player can reconnect into their seat, and a join during
 the grace cancels the removal. Zero (the default) removes the room as soon
 as it empties.
 
+`Room.SetKeepOnEmpty(true)` — a runtime toggle set from inside the actor —
+disables the removal entirely: the emptied room keeps its registration, its
+game loop keeps ticking, and a returning player rejoins their seat. Turning
+it off on an emptied room resumes the normal removal; an explicit
+`Manager.Remove` or server shutdown closes the room regardless.
+
 Server shutdown runs the same path for every room: `app.Run`'s context
 cancel → gateway teardown → `Manager.ShutdownAll` → `Shutdown` → `OnClose`
 per room (no `room.removed` events at that point — nobody is listening).

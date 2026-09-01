@@ -158,6 +158,10 @@ type AnyRoom interface {
 	Close()
 	Open()
 	IsOpen() bool
+	// SetKeepOnEmpty toggles the auto-removal of an emptied room
+	// (Room.SetKeepOnEmpty). It runs inside the room actor and must be
+	// called from hooks, handlers or OnTick.
+	SetKeepOnEmpty(keep bool)
 	Shutdown()
 	HandlesOp(op uint16) bool
 	// HandleMessage runs the matching module handler inside the room actor;
