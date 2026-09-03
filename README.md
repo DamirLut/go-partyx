@@ -1,4 +1,11 @@
-# partyx
+<p align="center">
+  <img src=".github/assets/partyx.webp" alt="partyx logo" width="200" />
+</p>
+
+# PartyX
+
+![Tests](https://github.com/damirlut/go-partyx/actions/workflows/test.yml/badge.svg)
+![GitHub Tag](https://img.shields.io/github/v/tag/damirlut/go-partyx)
 
 A Go game server framework for fast prototyping. Binary WebSocket protocol on
 [arpack](https://github.com/edmand46/arpack) (code generation, cross-language
