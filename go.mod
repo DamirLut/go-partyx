@@ -3,7 +3,7 @@ module github.com/damirlut/go-partyx
 go 1.27
 
 require (
-	github.com/edmand46/arpack v1.0.2
+	github.com/edmand46/arpack v1.3.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
